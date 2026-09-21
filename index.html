@@ -33,6 +33,7 @@ const MAG = 20, RELOAD_TIME = 2000, FIRE_INTERVAL = 100, BULLET_SPEED = 720;
 const PAL = {
   W:'#ffffff', l:'#d6e6f2', b:'#7f9fb8', k:'#1f2a38', p:'#ff9fb5', s:'#c5d9e6',
   g:'#8aa8c0', G:'#5f7f9a', w:'#f4fbff', t:'#ffffff', x:'#1f2a38', o:'#8fa9bd',
+  Y:'#fff6a8', y:'#ffd84d', q:'#e0a800', h:'#ffffff',
 };
 const SPRITES = {
   beluga: { scale:3, rows:[
@@ -86,6 +87,22 @@ const SPRITES = {
     "...oWWWo.oWWWWo....",
     "...ooooo.oooooo...."] },
 };
+// 仲間：同じ絵を小さく／大きく描く
+SPRITES.beluga_s = { scale:2, rows:SPRITES.beluga.rows };
+SPRITES.beluga_l = { scale:4, rows:SPRITES.beluga.rows };
+// 光るイカ（仲間を呼ぶアイテム）
+SPRITES.squid = { scale:3, rows:[
+  ".....qq.....",
+  "...qqYYqq...",
+  "..qYYYYYYq..",
+  "..qYhYYYYq..",
+  ".qqYYYYYYqq.",
+  "qYqYkYYkYqYq",
+  ".qqYYYYYYqq.",
+  "..qYYYYYYq..",
+  "..qYqYYqYq..",
+  "..qYqYYqYq..",
+  "..q.q..q.q.."] };
 for (const S of Object.values(SPRITES)) {
   const w = Math.max(...S.rows.map(r => r.length)), h = S.rows.length;
   S.w = w * S.scale; S.h = h * S.scale;
@@ -114,11 +131,11 @@ const TYPES = {
 };
 
 const player = { x:52, y:H/2, w:60, h:33, speed:260, hp:10 };
-let bullets, enemies, particles, ammo, reloadEnd, lastShot, spawnTimer, elapsed, score, gameOver;
+let allies, squids, texts, squidTimer, bullets, enemies, particles, ammo, reloadEnd, lastShot, spawnTimer, elapsed, score, gameOver;
 const keys = {}, mouse = { x:W/2, y:H/2, down:false };
 
 function reset() {
-  bullets = []; enemies = []; particles = [];
+  bullets = []; enemies = []; particles = []; allies = []; squids = []; texts = []; squidTimer = 12;
   ammo = MAG; reloadEnd = 0; lastShot = 0; spawnTimer = 1;
   elapsed = 0; score = 0; gameOver = false; player.hp = 10; player.y = H/2; player.hurtUntil = 0;
 }
@@ -175,7 +192,7 @@ function shoot(now) {
   lastShot = now;
   const ox = player.x + 26, oy = player.y - 3;
   const a = Math.atan2(mouse.y - oy, mouse.x - ox) + (Math.random() - .5) * 0.04;
-  bullets.push({ age:0, x:ox, y:oy, vx:Math.cos(a) * BULLET_SPEED, vy:Math.sin(a) * BULLET_SPEED });
+  bullets.push({ age:0, dmg:1, size:1, tint:null, x:ox, y:oy, vx:Math.cos(a) * BULLET_SPEED, vy:Math.sin(a) * BULLET_SPEED });
   if (--ammo <= 0) reloadEnd = now + RELOAD_TIME;
 }
 
@@ -185,6 +202,80 @@ function spawnEnemy() {
   const key = r < big ? 'big' : r < big + fast ? 'fast' : 'normal';
   const t = TYPES[key];
   enemies.push({ type:key, ...t, maxHp:t.hp, x:W + t.w, y:t.h/2 + 10 + Math.random() * (H - t.h - 20), flash:0 });
+}
+
+const ALLY_KINDS = {
+  small: { sprite:'beluga_s', tx:118, dy:-52, w:40, h:22, rate:0.7, dmg:1, size:0.8, tint:'#ff8fb0' },
+  large: { sprite:'beluga_l', tx:104, dy: 62, w:76, h:40, rate:1.1, dmg:2, size:1.6, tint:'#2f6fb8' },
+};
+function floatText(x, y, txt, color) { texts.push({ x, y, txt, color, life:1.1 }); }
+
+function addAlly(kind) {
+  const k = ALLY_KINDS[kind];
+  allies.push({ kind, ...k, x:-70, y:player.y + k.dy, state:'idle', until:0, cd:0.5 });
+  floatText(player.x + 50, player.y - 40, 'なかまが来た！', '#e8890c');
+}
+
+function updateAllies(dt, now) {
+  // イカの出現：仲間が足りないときだけ、一定間隔で右から流れてくる
+  if (allies.length < 2 && !squids.length) squidTimer -= dt;
+  if (squidTimer <= 0) {
+    squids.push({ x:W + 40, y:70 + Math.random() * (H - 140), t:Math.random() * 6 });
+    squidTimer = 16 + Math.random() * 6;
+  }
+  for (const q of squids) {
+    q.x -= 65 * dt; q.t += dt;
+    q.by = q.y + Math.sin(q.t * 3) * 14;
+    // ベルーガが触れたらゲット
+    const sw = SPRITES.squid.w, sh = SPRITES.squid.h;
+    if (!q.got && Math.abs(q.x - player.x) < sw / 2 + player.w / 2 - 6 && Math.abs(q.by - player.y) < sh / 2 + player.h / 2 - 4) {
+      q.got = true;
+      const missing = ['small', 'large'].filter(k => !allies.some(a => a.kind === k));
+      if (missing.length) addAlly(missing[0]);
+      burst(q.x, q.by, '#ffe066', 22, 200);
+    }
+  }
+  squids = squids.filter(q => !q.got && q.x > -60);
+
+  for (const a of allies) {
+    if (a.state === 'idle') {
+      const ty = Math.max(a.h / 2, Math.min(H - a.h / 2, player.y + a.dy));
+      a.x += (a.tx - a.x) * Math.min(1, 5 * dt);
+      a.y += (ty - a.y) * Math.min(1, 6 * dt);
+      // 敵にぶつかられたら痛がる → 逃げる
+      for (const e of enemies) {
+        if (e.hp <= 0 || (e.hitAllies && e.hitAllies.has(a))) continue;
+        if (Math.abs(e.x - a.x) < e.w / 2 + a.w / 2 - 4 && Math.abs(e.y - a.y) < e.h / 2 + a.h / 2 - 2) {
+          (e.hitAllies = e.hitAllies || new Set()).add(a);
+          a.state = 'hurt'; a.until = now + 550; a.vx = 0;
+          burst(a.x, a.y, '#ff6b6b', 10, 160); floatText(a.x, a.y - a.h / 2 - 8, 'きゃっ！', '#e33');
+          break;
+        }
+      }
+      // 自動で一番近い敵を撃つ（弾数は消費しない）
+      a.cd -= dt;
+      if (a.state === 'idle' && a.cd <= 0) {
+        let tgt = null;
+        for (const e of enemies) if (e.hp > 0 && e.x > a.x + 20 && e.x < W && (!tgt || e.x < tgt.x)) tgt = e;
+        if (tgt) {
+          a.cd = a.rate;
+          const ox = a.x + a.w * 0.4, oy = a.y - 2, ang = Math.atan2(tgt.y - oy, tgt.x - ox);
+          bullets.push({ age:0, dmg:a.dmg, size:a.size, tint:a.tint, x:ox, y:oy, vx:Math.cos(ang) * 560, vy:Math.sin(ang) * 560 });
+        }
+      }
+    } else if (a.state === 'hurt') {
+      if (now >= a.until) a.state = 'flee';
+    } else if (a.state === 'flee') {
+      a.vx = (a.vx || 0) - 900 * dt;              // 後ろ（左）へ猛ダッシュ
+      a.x += a.vx * dt; a.y -= 30 * dt;
+      if (Math.random() < 0.6) particles.push({ x:a.x + a.w / 2, y:a.y + (Math.random() - .5) * a.h, vx:60, vy:-20, life:0.5, size:2.5, color:'#fff', rot:0 });
+      if (a.x < -120) a.dead = true;
+    }
+  }
+  allies = allies.filter(a => !a.dead);
+
+  for (const t of texts) { t.y -= 24 * dt; t.life -= dt; }
+  texts = texts.filter(t => t.life > 0);
 }
 
 function burst(x, y, color, n, spd) {
@@ -212,6 +303,8 @@ function update(dt, now) {
     spawnTimer = Math.max(0.35, 1.4 - elapsed / 60) * (0.6 + Math.random() * 0.8);
   }
 
+  updateAllies(dt, now);
+
   for (const b of bullets) { b.x += b.vx * dt; b.y += b.vy * dt; b.age += dt; }
   for (const e of enemies) {
     e.x -= e.speed * dt;
@@ -224,7 +317,7 @@ function update(dt, now) {
       if (e.hp <= 0) continue;
       if (Math.abs(b.x - e.x) < e.w/2 + 3 && Math.abs(b.y - e.y) < e.h/2 + 3) {
         b.dead = true;
-        e.hp--; e.flash = 0.08;
+        e.hp -= b.dmg; e.flash = 0.08;
         e.x += e.type === 'big' ? 6 : 14;   // ノックバック
         burst(b.x, b.y, '#fff', 3, 120);
         if (e.hp <= 0) { score += e.score; burst(e.x, e.y, e.chip, e.type === 'big' ? 40 : 16, 220); }
@@ -248,6 +341,32 @@ function update(dt, now) {
     p.x += p.vx * dt; p.y += p.vy * dt; p.vy += 300 * dt; p.vx *= 0.98; p.life -= dt; p.rot += dt * 8;
   }
   particles = particles.filter(p => p.life > 0);
+}
+
+// ベルーガを描く。mode: 'idle' | 'hurt'(震えて赤くなる) | 'flee'(逃げる)、t: 痛がり残り(1→0)
+function drawBeluga(S, cx, cy, mode, t, now, flip) {
+  const u = S.scale;
+  let bx = Math.round(cx - S.w / 2), by = Math.round(cy - S.h / 2), img = S.img;
+  if (mode === 'hurt') {
+    bx += Math.round(Math.sin(now / 20) * 4 * t) - Math.round(6 * t);
+    by -= Math.round(Math.sin((1 - t) * Math.PI) * 4);
+    if (Math.floor(now / 70) % 2) img = S.hurtImg;
+  } else if (mode === 'flee') {
+    bx += Math.round(Math.sin(now / 25) * 2); by += Math.round(Math.sin(now / 40) * 2);
+    img = S.hurtImg;
+  }
+  ctx.save();
+  if (flip) { ctx.translate(bx + S.w / 2, 0); ctx.scale(-1, 1); ctx.translate(-(bx + S.w / 2), 0); }
+  ctx.drawImage(img, bx, by);
+  if (mode !== 'idle') {
+    // 目を「> <」風にぎゅっと閉じて、なみだ
+    ctx.fillStyle = '#fff'; ctx.fillRect(bx + 12 * u, by + 4 * u, 3 * u, 3 * u);
+    ctx.fillStyle = '#1f2a38';
+    ctx.fillRect(bx + 13 * u, by + 4 * u, u, u); ctx.fillRect(bx + 14 * u, by + 5 * u, u, u); ctx.fillRect(bx + 13 * u, by + 6 * u, u, u);
+    ctx.fillStyle = '#5aa9d6';
+    ctx.fillRect(bx + 15 * u, by + 7 * u, u, u); ctx.fillRect(bx + 15 * u, by + 9 * u - Math.round(t * u), u, u);
+  }
+  ctx.restore();
 }
 
 function draw(now) {
@@ -276,10 +395,10 @@ function draw(now) {
   // 弾（あわ）
   for (const b of bullets) {
     // バブルリング：進むほど少し広がる
-    const r = 4 + Math.min(3, b.age * 6);
+    const r = (4 + Math.min(3, b.age * 6)) * b.size, col = b.tint || 'rgba(90,169,214,.9)';
     ctx.fillStyle = 'rgba(200,240,255,.22)';
     ctx.beginPath(); ctx.arc(b.x, b.y, r, 0, 7); ctx.fill();
-    ctx.strokeStyle = 'rgba(90,169,214,.9)'; ctx.lineWidth = 2.5;
+    ctx.strokeStyle = col; ctx.lineWidth = 2.5;
     ctx.beginPath(); ctx.arc(b.x, b.y, r, 0, 7); ctx.stroke();
     ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.2;
     ctx.beginPath(); ctx.arc(b.x, b.y, r - 1.2, 0, 7); ctx.stroke();
@@ -294,21 +413,33 @@ function draw(now) {
     ctx.restore();
   }
 
+  // イカ（光るアイテム）
+  for (const q of squids) {
+    const S = SPRITES.squid, pulse = 0.5 + 0.5 * Math.sin(q.t * 5), gr = 38 + pulse * 10;
+    const g = ctx.createRadialGradient(q.x, q.by, 4, q.x, q.by, gr);
+    g.addColorStop(0, 'rgba(255,240,120,.85)'); g.addColorStop(1, 'rgba(255,240,120,0)');
+    ctx.fillStyle = g; ctx.fillRect(q.x - gr, q.by - gr, gr * 2, gr * 2);
+    ctx.drawImage(S.img, Math.round(q.x - S.w / 2), Math.round(q.by - S.h / 2));
+    ctx.fillStyle = '#fff';
+    const sx = Math.sin(q.t * 4) * 26, sy = Math.cos(q.t * 3) * 20;
+    ctx.fillRect(Math.round(q.x + sx), Math.round(q.by + sy), 3, 3);
+    ctx.fillRect(Math.round(q.x - sy), Math.round(q.by + sx * .7), 2, 2);
+  }
+
+  // 仲間ベルーガ
+  for (const a of allies) {
+    const S = SPRITES[a.sprite];
+    if (a.state === 'idle') drawBeluga(S, a.x, a.y + Math.round(Math.sin(now / 250 + a.dy) * 2), 'idle', 0, now, false);
+    else if (a.state === 'hurt') drawBeluga(S, a.x, a.y, 'hurt', (a.until - now) / 550, now, false);
+    else drawBeluga(S, a.x, a.y, 'flee', 0.5, now, true);
+  }
+
   // プレイヤー（ベルーガ）
   const B = SPRITES.beluga, hurt = player.hurtUntil > now;
-  const bob = Math.round(Math.sin(now / 250) * 2);
   if (hurt) {
-    const t = (player.hurtUntil - now) / 700;            // 1 → 0
-    const sx = Math.round(Math.sin(now / 20) * 4 * t);   // ぶるぶる震える
-    const bx = Math.round(player.x - B.w / 2) + sx - Math.round(6 * t);  // 少しのけぞる
-    const by = Math.round(player.y - B.h / 2) - Math.round(Math.sin((1 - t) * Math.PI) * 4);
-    ctx.drawImage(Math.floor(now / 70) % 2 ? B.hurtImg : B.img, bx, by);
-    // 目を「> <」風にぎゅっと閉じて、なみだ
-    ctx.fillStyle = '#fff'; ctx.fillRect(bx + 36, by + 12, 9, 9);
-    ctx.fillStyle = '#1f2a38';
-    ctx.fillRect(bx + 39, by + 12, 3, 3); ctx.fillRect(bx + 42, by + 15, 3, 3); ctx.fillRect(bx + 39, by + 18, 3, 3);
-    ctx.fillStyle = '#5aa9d6'; ctx.fillRect(bx + 45, by + 21, 3, 3); ctx.fillRect(bx + 45, by + 27 - Math.round(t * 3), 3, 3);
-    // 「いたっ！」
+    const t = (player.hurtUntil - now) / 700;
+    drawBeluga(B, player.x, player.y, 'hurt', t, now, false);
+    const bx = Math.round(player.x - B.w / 2), by = Math.round(player.y - B.h / 2) - Math.round(Math.sin((1 - t) * Math.PI) * 4);
     ctx.font = 'bold 18px sans-serif'; ctx.textAlign = 'left';
     const ty = by - 8 - (1 - t) * 14;
     ctx.globalAlpha = Math.min(1, t * 2);
@@ -316,8 +447,17 @@ function draw(now) {
     ctx.fillStyle = '#e33'; ctx.fillText('いたっ！', bx + 20, ty);
     ctx.globalAlpha = 1;
   } else {
-    ctx.drawImage(B.img, Math.round(player.x - B.w / 2), Math.round(player.y - B.h / 2) + bob);
+    drawBeluga(B, player.x, player.y + Math.round(Math.sin(now / 250) * 2), 'idle', 0, now, false);
   }
+
+  // ふわっと浮かぶ文字
+  ctx.font = 'bold 16px sans-serif'; ctx.textAlign = 'center';
+  for (const t of texts) {
+    ctx.globalAlpha = Math.min(1, t.life * 2);
+    ctx.lineWidth = 4; ctx.strokeStyle = '#fff'; ctx.strokeText(t.txt, t.x, t.y);
+    ctx.fillStyle = t.color; ctx.fillText(t.txt, t.x, t.y);
+  }
+  ctx.globalAlpha = 1;
 
   // 照準
   ctx.strokeStyle = 'rgba(0,0,0,.6)'; ctx.lineWidth = 1;
