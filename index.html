@@ -243,12 +243,8 @@ function updateAllies(dt, now) {
   for (const q of squids) {
     q.x -= 65 * dt; q.t += dt;
     q.by = q.y + Math.sin(q.t * 2.2) * 9;
-    // ベルーガが触れたらゲット
+    // 触れても取れない。バブルを3回当てると仲間になる（当てるたびに色が変わる）
     const sw = SPRITES.squid.w, sh = SPRITES.squid.h;
-    if (!q.got && Math.abs(q.x - player.x) < sw / 2 + player.w / 2 - 6 && Math.abs(q.by - player.y) < sh / 2 + player.h / 2 - 4) {
-      collectSquid(q);
-    }
-    // バブルを3回当てても仲間になる（当てるたびに色が変わる）
     q.flash = Math.max(0, (q.flash || 0) - dt);
     for (const b of bullets) {
       if (q.got || b.dead) continue;
