@@ -242,7 +242,7 @@ function updateAllies(dt, now) {
   }
   for (const q of squids) {
     q.x -= 65 * dt; q.t += dt;
-    q.by = q.y + Math.sin(q.t * 3) * 14;
+    q.by = q.y + Math.sin(q.t * 2.2) * 9;
     // ベルーガが触れたらゲット
     const sw = SPRITES.squid.w, sh = SPRITES.squid.h;
     if (!q.got && Math.abs(q.x - player.x) < sw / 2 + player.w / 2 - 6 && Math.abs(q.by - player.y) < sh / 2 + player.h / 2 - 4) {
@@ -252,7 +252,7 @@ function updateAllies(dt, now) {
     q.flash = Math.max(0, (q.flash || 0) - dt);
     for (const b of bullets) {
       if (q.got || b.dead) continue;
-      if (Math.abs(b.x - q.x) < sw / 2 + 2 && Math.abs(b.y - q.by) < sh / 2 + 2) {
+      if (Math.abs(b.x - q.x) < sw / 2 + 14 && Math.abs(b.y - q.by) < sh / 2 + 16) {
         b.dead = true; q.hits = (q.hits || 0) + 1; q.flash = 0.15;
         burst(q.x, q.by, SQUID_LOOK[Math.min(q.hits, SQUID_HITS - 1)].chip, 12, 170);
         if (q.hits >= SQUID_HITS) collectSquid(q);
