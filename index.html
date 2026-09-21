@@ -11,7 +11,7 @@
   #entry input { font-size:18px; padding:6px 10px; width:150px; border-radius:6px; border:2px solid #5aa9d6; }
   #entry button { font-size:18px; padding:6px 16px; margin-left:6px; border-radius:6px; border:0; background:#5aa9d6; color:#fff; cursor:pointer; }
   #entry small { display:block; margin-top:8px; color:#ffd; }
-  canvas { background:#bfe6f5; cursor:crosshair; border:2px solid #345; max-width:100vw; max-height:100vh; image-rendering:pixelated; }
+  canvas { box-sizing:border-box; background:#bfe6f5; cursor:crosshair; border:2px solid #345; width:min(100vw, calc(100vh * 16 / 9), 800px); height:auto; image-rendering:pixelated; }
 </style>
 </head>
 <body>
@@ -35,6 +35,7 @@ const PAL = {
   g:'#8aa8c0', G:'#5f7f9a', w:'#f4fbff', t:'#ffffff', x:'#1f2a38', o:'#8fa9bd',
   Y:'#fff6a8', y:'#ffd84d', q:'#e0a800', h:'#ffffff',
   A:'#ffc4e2', B:'#e0559c', C:'#b8f5ff', D:'#2aa5c8',
+  J:'#ffc2ea', j:'#d86bb0', R:'#ff8a78', r:'#d0483a', U:'#8a76c8', u:'#4a3d80',
 };
 const SPRITES = {
   beluga: { scale:3, rows:[
@@ -104,6 +105,52 @@ SPRITES.squid = { scale:3, rows:[
   "..qYqYYqYq..",
   "..qYqYYqYq..",
   "..q.q..q.q.."] };
+// クラゲ（敵）・タコ・チョウチンアンコウ（ボス用）
+SPRITES.jelly = { scale:3, rows:[
+  "...JJJJ...",
+  "..JJJJJJ..",
+  ".JJhJJJJJ.",
+  ".JkJJJJkJ.",
+  ".JJJJJJJJ.",
+  ".jjjjjjjj.",
+  "..j.jj.j..",
+  ".j..j.j..j",
+  "..j.j..j.."] };
+SPRITES.octopus = { scale:8, rows:[
+  ".....rrrrrr.....",
+  "...rrRRRRRRrr...",
+  "..rRRRRRRRRRRr..",
+  ".rRRRRRRRRRRRRr.",
+  ".rRRhhRRRRhhRRr.",
+  ".rRRkhRRRRkhRRr.",
+  ".rRRRRRRRRRRRRr.",
+  "..rRRRRRRRRRRr..",
+  ".rRrRrRRRRrRrRr.",
+  "rRr.rRr..rRr.rRr",
+  "rr..rr....rr..rr"] };
+SPRITES.angler = { scale:7, rows:[
+  ".......yy.........",
+  "......yYYy........",
+  ".......yy.........",
+  "........u.........",
+  "........uu........",
+  "....uuuuuuuuuu....",
+  "...uUUUUUUUUUUu...",
+  "..uUUhkUUUUUUUUuu.",
+  "..uUUkkUUUUUUUUUuu",
+  ".uUUUUUUUUUUUUuuu.",
+  ".uttUtUtUtUUUuu...",
+  ".uUUUUUUUUUUUu....",
+  "..uuUUUUUUUuu.....",
+  "....uuuuuuuu......"] };
+// ボス（同じ絵を大きく／色を変えて使う）
+SPRITES.boss1 = { scale:7,  rows:SPRITES.bear.rows };
+SPRITES.boss2 = { scale:8,  rows:SPRITES.orca.rows };
+SPRITES.boss3 = { scale:8,  rows:SPRITES.octopus.rows };
+SPRITES.boss4 = { scale:8,  rows:SPRITES.shark.rows, tint:'rgba(40,200,140,.38)' };
+SPRITES.boss5 = { scale:11, rows:SPRITES.jelly.rows };
+SPRITES.boss6 = { scale:7,  rows:SPRITES.angler.rows };
+SPRITES.boss7 = { scale:9,  rows:SPRITES.orca.rows, tint:'rgba(150,60,220,.5)' };
 // 撃つたびに色が変わる（黄 → ピンク → 水色）
 SPRITES.squid1 = { scale:3, rows:SPRITES.squid.rows.map(r => r.replace(/Y/g, 'A').replace(/q/g, 'B')) };
 SPRITES.squid2 = { scale:3, rows:SPRITES.squid.rows.map(r => r.replace(/Y/g, 'C').replace(/q/g, 'D')) };
@@ -126,6 +173,10 @@ for (const S of Object.values(SPRITES)) {
     }));
     S[flash ? 'flashImg' : 'img'] = c;
   }
+  if (S.tint) {
+    const tg = S.img.getContext('2d');
+    tg.globalCompositeOperation = 'source-atop'; tg.fillStyle = S.tint; tg.fillRect(0, 0, S.w, S.h);
+  }
   // 赤みがかった「いたい」用
   const hc = document.createElement('canvas'); hc.width = S.w; hc.height = S.h;
   const hg = hc.getContext('2d'); hg.drawImage(S.img, 0, 0);
@@ -138,16 +189,53 @@ const TYPES = {
   normal: { sprite:'shark', w:40, h:20, hp:3,  speed:45,  chip:'#8aa8c0', dmg:1, score:10 },
   fast:   { sprite:'orca',  w:40, h:20, hp:1,  speed:110, chip:'#3a4a5e', dmg:1, score:15 },
   big:    { sprite:'bear',  w:66, h:56, hp:20, speed:20,  chip:'#ffffff', dmg:3, score:50 },
+  jelly:  { sprite:'jelly', w:26, h:24, hp:2,  speed:42,  chip:'#ff9fd0', dmg:1, score:20, wob:{ amp:38, freq:2.2 } },
 };
 
+// ---- 七つの海（ステージ）----
+const WAVE_DUR = 38;   // 通常戦の秒数。そのあとボス（合計で1分ほど）
+const STAGES = [
+  { name:'北極海', bg:['#eaf7ff', '#b5dcf0'], ui:'#123', deco:'ice', interval:2.4, speed:0.85, pack:0,
+    w:{ normal:.82, fast:.10, big:.08 },
+    story:'ふるさとの北極海。氷の海のむこうには、まだ見ぬ七つの海がひろがっている。ベルーガは仲間をさがして、旅に出ることにした。',
+    boss:{ name:'シロクマ王', sprite:'boss1', chip:'#ffffff', crown:{ x:.17, y:0 } } },
+  { name:'北大西洋', bg:['#d3dde4', '#9db2c1'], ui:'#123', deco:'fog', interval:2.15, speed:0.9, pack:0,
+    w:{ normal:.6, fast:.3, big:.1 },
+    story:'霧がたちこめる北大西洋。見えにくい海のなかで、すばやいシャチがおそってくる。',
+    boss:{ name:'ダイシャチ', sprite:'boss2', chip:'#3a4a5e' } },
+  { name:'北太平洋', bg:['#86bfe3', '#3f83b8'], ui:'#0b1d30', deco:'rough', wobble:26, interval:1.95, speed:0.95, pack:0,
+    w:{ normal:.5, fast:.3, big:.1, jelly:.1 },
+    story:'波あらい北太平洋。はげしい波にゆられて、敵の動きが読みにくい！',
+    boss:{ name:'オオダコ', sprite:'boss3', chip:'#ff8a78' } },
+  { name:'インド洋', bg:['#c4f6ee', '#5fd0c4'], ui:'#0b2b30', deco:'warm', interval:1.8, speed:1.0, pack:0.1,
+    w:{ normal:.35, fast:.2, big:.1, jelly:.35 },
+    story:'あたたかいインド洋。ふわふわ泳ぐクラゲが、ゆらゆらと近づいてくる。',
+    boss:{ name:'メガシャーク', sprite:'boss4', chip:'#5fd0a0' } },
+  { name:'南太平洋', bg:['#a9f0ff', '#4fc3e8'], ui:'#0b2b3d', deco:'coral', interval:1.65, speed:1.05, pack:0.15,
+    w:{ normal:.3, fast:.4, big:.1, jelly:.2 },
+    story:'サンゴがきらめく南太平洋。足の速いシャチの群れが、まっすぐ向かってくる！',
+    boss:{ name:'クラゲ王', sprite:'boss5', chip:'#ff9fd0' } },
+  { name:'南大西洋', bg:['#3d6da0', '#1a3d6b'], ui:'#ffffff', deco:'deep', glow:true, interval:1.5, speed:1.1, pack:0.22,
+    w:{ normal:.4, fast:.25, big:.15, jelly:.2 },
+    story:'光のとどかない深い南大西洋。くらやみのむこうで、なにかが光っている…。',
+    boss:{ name:'チョウチンアンコウ', sprite:'boss6', chip:'#b8a6ff' } },
+  { name:'南極海', bg:['#b4c9dc', '#7391ac'], ui:'#0c1f33', deco:'blizzard', interval:1.4, speed:1.15, pack:0.3,
+    w:{ normal:.3, fast:.3, big:.25, jelly:.15 },
+    story:'旅のおわり、南極海。吹雪のむこうで、この海をおさめる闇の帝王が待っている。',
+    boss:{ name:'ダーク・オルカ帝王', sprite:'boss7', chip:'#b07aff', crown:{ x:.13, y:.32 } } },
+];
+const AMB = Array.from({ length:70 }, () => ({ x:Math.random(), y:Math.random(), s:0.4 + Math.random() * 0.9, p:Math.random() * 6 }));
+const mod = (a, n) => ((a % n) + n) % n;
+
 const player = { x:52, y:H/2, w:60, h:33, speed:260, hp:10 };
-let allies, squids, texts, squidTimer, bullets, enemies, particles, ammo, reloadEnd, lastShot, spawnTimer, elapsed, score, gameOver;
+let stage, phase, phaseT, stageTime, cleared, clearInfo, bossWarn, bossRef, allies, squids, texts, squidTimer, bullets, enemies, particles, ammo, reloadEnd, lastShot, spawnTimer, elapsed, score, gameOver;
 const keys = {}, mouse = { x:W/2, y:H/2, down:false };
 
 function reset() {
   bullets = []; enemies = []; particles = []; allies = []; squids = []; texts = []; squidTimer = 6;
   ammo = MAG; reloadEnd = 0; lastShot = 0; spawnTimer = 1;
   elapsed = 0; score = 0; gameOver = false; player.hp = 10; player.y = H/2; player.hurtUntil = 0;
+  cleared = false; clearInfo = null; startStage(0);
 }
 reset();
 
@@ -179,6 +267,7 @@ nameEl.addEventListener('keydown', e => { if (e.key === 'Enter') submitEntry(); 
 
 addEventListener('keydown', e => {
   if (e.target === nameEl) return;   // 名前入力中はゲーム操作を無視
+  if ((e.key === ' ' || e.key === 'Enter') && (phase === 'intro' || phase === 'clear')) { skipCard(); e.preventDefault(); return; }
   keys[e.key.toLowerCase()] = true;
   if (['arrowup','arrowdown'].includes(e.key.toLowerCase())) e.preventDefault();
   if (e.key.toLowerCase() === 'r') { if (gameOver) { if (!entryActive) reset(); } else startReload(performance.now()); }
@@ -190,7 +279,7 @@ function setMouse(e) {
   mouse.y = (e.clientY - r.top) * H / r.height;
 }
 cv.addEventListener('mousemove', setMouse);
-cv.addEventListener('mousedown', e => { setMouse(e); mouse.down = true; if (gameOver && !entryActive) reset(); });
+cv.addEventListener('mousedown', e => { setMouse(e); mouse.down = true; if (gameOver && !entryActive) reset(); else skipCard(); });
 addEventListener('mouseup', () => mouse.down = false);
 
 function startReload(now) {
@@ -206,12 +295,106 @@ function shoot(now) {
   if (--ammo <= 0) reloadEnd = now + RELOAD_TIME;
 }
 
-function spawnEnemy() {
-  const r = Math.random();
-  const big = Math.min(0.05 + elapsed / 600, 0.2), fast = Math.min(0.2 + elapsed / 300, 0.4);
-  const key = r < big ? 'big' : r < big + fast ? 'fast' : 'normal';
-  const t = TYPES[key];
-  enemies.push({ type:key, ...t, maxHp:t.hp, x:W + t.w, y:t.h/2 + 10 + Math.random() * (H - t.h - 20), flash:0 });
+function startStage(i) {
+  stage = i; phase = 'intro'; phaseT = 0; stageTime = 0; bossWarn = 0; bossRef = null;
+  enemies = []; bullets = []; squids = []; spawnTimer = 1;
+}
+function advancePhase() {
+  if (phase === 'intro') { phase = 'wave'; phaseT = 0; }
+  else if (phase === 'clear') startStage(stage + 1);
+}
+function skipCard() {
+  if (!gameOver && (phase === 'intro' || phase === 'clear') && phaseT > 0.4) { advancePhase(); return true; }
+  return false;
+}
+
+// 出す敵の種類を、その海の割合から選ぶ（時間がたつほど大型が増える）
+function pickKey(noBig, f) {
+  const w = STAGES[stage].w, list = [];
+  let tot = 0;
+  for (const k in w) {
+    if (noBig && k === 'big') continue;
+    const v = w[k] * (k === 'big' ? 0.6 + 0.8 * f : 1);
+    list.push([k, v]); tot += v;
+  }
+  let r = Math.random() * tot;
+  for (const [k, v] of list) { if ((r -= v) < 0) return k; }
+  return list[0][0];
+}
+
+function createEnemy(key, x, y, noWob) {
+  const t = TYPES[key], st = STAGES[stage];
+  const e = { type:key, ...t, speed:t.speed * st.speed, maxHp:t.hp, x, y, y0:y, flash:0, t:0, ph:Math.random() * 6 };
+  if (key === 'normal' || key === 'jelly') { e.hp += Math.floor(stage / 3); e.maxHp = e.hp; }
+  if (noWob) e.wob = null;
+  else if (!e.wob && st.wobble && key !== 'big') e.wob = { amp:st.wobble, freq:2.2 };
+  return e;
+}
+function randY(key, noWob) {
+  const t = TYPES[key], st = STAGES[stage];
+  const amp = noWob ? 0 : (t.wob ? t.wob.amp : (st.wobble && key !== 'big' ? st.wobble : 0));
+  const lo = amp + t.h / 2 + 10, hi = H - amp - t.h / 2 - 10;
+  return lo + Math.random() * (hi - lo);
+}
+
+function spawnWave(f) {
+  const st = STAGES[stage];
+  if (phase === 'wave' && Math.random() < st.pack) {
+    // 3匹がV字の隊形でやってくる
+    const key = pickKey(true, f), y0 = 100 + Math.random() * (H - 200);
+    for (let i = -1; i <= 1; i++) enemies.push(createEnemy(key, W + 40 + Math.abs(i) * 30, y0 + i * 46, true));
+    return;
+  }
+  const key = pickKey(false, f);
+  enemies.push(createEnemy(key, W + TYPES[key].w, randY(key, false)));
+}
+
+// ---- ボス ----
+function startBoss() {
+  phase = 'boss';
+  const B = STAGES[stage].boss, S = SPRITES[B.sprite], hp = 70 + 24 * stage;
+  bossRef = { type:'boss', boss:true, sprite:B.sprite, name:B.name, crown:B.crown, chip:B.chip, w:S.w * 0.85, h:S.h * 0.85,
+              hp, maxHp:hp, speed:0, dmg:5, score:300 + 150 * stage, flash:0, x:W + S.w / 2, y:H / 2, t:0, entering:true, summonCd:4 };
+  enemies.push(bossRef);
+  bossWarn = 2.6;
+}
+function summonMinions(e, enraged) {
+  const n = 1 + (stage >= 3 ? 1 : 0) + (enraged ? 1 : 0);
+  for (let i = 0; i < n; i++) {
+    const key = pickKey(true, 1);
+    const y = Math.max(30, Math.min(H - 30, e.y + (i - (n - 1) / 2) * 44));
+    enemies.push(createEnemy(key, e.x - e.w / 2 - 10, y, true));
+  }
+  burst(e.x - e.w / 2, e.y, e.chip, 10, 150);
+}
+function updateBoss(e, dt) {
+  e.t += dt;
+  const S = SPRITES[e.sprite];
+  if (e.entering) {
+    e.x -= 130 * dt;
+    if (e.x <= W - S.w / 2 - 30) e.entering = false;
+  } else {
+    const enraged = e.hp < e.maxHp * 0.5;
+    e.x -= (8 + 2 * stage) * (enraged ? 1.6 : 1) * dt;   // ゆっくり防衛ラインへせまる
+    e.summonCd -= dt;
+    if (e.summonCd <= 0) {
+      summonMinions(e, enraged);
+      e.summonCd = Math.max(2.4, 6.5 - 0.5 * stage) * (enraged ? 0.7 : 1);
+    }
+  }
+  const amp = Math.max(20, ((H - e.h) / 2 - 12) * 0.85);
+  e.y = H / 2 + Math.sin(e.t * (0.7 + 0.08 * stage)) * amp;
+}
+function onBossDefeated(e) {
+  for (const o of enemies) if (o !== e && o.hp > 0) { o.hp = 0; burst(o.x, o.y, o.chip, 10, 180); }
+  burst(e.x, e.y, '#ffe066', 60, 340); burst(e.x, e.y, e.chip, 50, 260);
+  floatText(e.x, e.y - e.h / 2 - 10, 'ボスげきは！', '#e8890c');
+  bossRef = null; bullets = [];
+  if (stage >= STAGES.length - 1) { cleared = true; gameOver = true; onGameOver(); return; }
+  const heal = Math.min(2, 10 - player.hp);
+  player.hp += heal;
+  clearInfo = { bonus:e.score, heal };
+  phase = 'clear'; phaseT = 0;
 }
 
 const ALLY_KINDS = {
@@ -308,7 +491,17 @@ function burst(x, y, color, n, spd) {
 
 function update(dt, now) {
   if (gameOver) return;
+  if (phase === 'intro' || phase === 'clear') {   // ステージのカード表示中は止める
+    phaseT += dt;
+    for (const p of particles) { p.x += p.vx * dt; p.y += p.vy * dt; p.vy += 300 * dt; p.vx *= 0.98; p.life -= dt; p.rot += dt * 8; }
+    particles = particles.filter(p => p.life > 0);
+    for (const t of texts) { t.y -= 24 * dt; t.life -= dt; }
+    texts = texts.filter(t => t.life > 0);
+    if (phaseT > (phase === 'intro' ? 6 : 5)) advancePhase();
+    return;
+  }
   elapsed += dt;
+  if (bossWarn > 0) bossWarn -= dt;
 
   if (keys['w'] || keys['arrowup']) player.y -= player.speed * dt;
   if (keys['s'] || keys['arrowdown']) player.y += player.speed * dt;
@@ -317,17 +510,29 @@ function update(dt, now) {
   if (reloadEnd && now >= reloadEnd) { ammo = MAG; reloadEnd = 0; }
   if (mouse.down) shoot(now);
 
+  const st = STAGES[stage];
+  if (phase === 'wave') {
+    stageTime += dt;
+    if (stageTime >= WAVE_DUR) startBoss();
+  }
   spawnTimer -= dt;
   if (spawnTimer <= 0) {
-    spawnEnemy();
-    spawnTimer = Math.max(0.6, 1.8 - elapsed / 80) * (0.7 + Math.random() * 0.6) * (1 - 0.18 * allies.filter(a => a.state === "idle").length);
+    const f = phase === 'wave' ? stageTime / WAVE_DUR : 1;
+    const idle = allies.filter(a => a.state === 'idle').length;
+    spawnWave(f);
+    // 進むほど・仲間が多いほど、敵がふえる。ボス戦中は少なめ
+    spawnTimer = Math.max(0.55, st.interval * (1 - 0.25 * f)) * (0.7 + Math.random() * 0.6) * (1 - 0.18 * idle) * (phase === 'boss' ? 2.6 : 1);
   }
 
   updateAllies(dt, now);
 
   for (const b of bullets) { b.x += b.vx * dt; b.y += b.vy * dt; b.age += dt; }
   for (const e of enemies) {
-    e.x -= e.speed * dt;
+    if (e.boss) updateBoss(e, dt);
+    else {
+      e.x -= e.speed * dt; e.t += dt;
+      if (e.wob) e.y = e.y0 + Math.sin(e.t * e.wob.freq + e.ph) * e.wob.amp;
+    }
     e.flash = Math.max(0, e.flash - dt);
   }
 
@@ -338,9 +543,9 @@ function update(dt, now) {
       if (Math.abs(b.x - e.x) < e.w/2 + 3 && Math.abs(b.y - e.y) < e.h/2 + 3) {
         b.dead = true;
         e.hp -= b.dmg; e.flash = 0.08;
-        e.x += e.type === 'big' ? 6 : 14;   // ノックバック
+        e.x += e.boss ? 0.6 : e.type === 'big' ? 6 : 14;   // ノックバック
         burst(b.x, b.y, '#fff', 3, 120);
-        if (e.hp <= 0) { score += e.score; burst(e.x, e.y, e.chip, e.type === 'big' ? 40 : 16, 220); }
+        if (e.hp <= 0) { score += e.score; burst(e.x, e.y, e.chip, e.type === 'big' ? 40 : 16, 220); if (e.boss) onBossDefeated(e); }
         break;
       }
     }
@@ -350,7 +555,8 @@ function update(dt, now) {
   // 防衛ライン到達
   for (const e of enemies) {
     if (e.hp > 0 && e.x - e.w/2 <= LINE_X) {
-      player.hp -= e.dmg; e.hp = 0; player.hurtUntil = now + 700;
+      player.hp -= e.dmg; player.hurtUntil = now + 700;
+      if (e.boss) e.x += 260; else e.hp = 0;   // ボスは押し戻される
       burst(LINE_X + 4, e.y, '#ff6b6b', 12, 160);
       if (player.hp <= 0) { player.hp = 0; gameOver = true; onGameOver(); }
     }
@@ -389,12 +595,142 @@ function drawBeluga(S, cx, cy, mode, t, now, flip) {
   ctx.restore();
 }
 
-function draw(now) {
-  ctx.clearRect(0, 0, W, H);
-  // 水面のさざ波
-  ctx.fillStyle = 'rgba(255,255,255,.35)';
+function wrapText(txt, cx, y, maxW, lh) {
+  let line = '', yy = y;
+  for (const ch of txt) {
+    if (ctx.measureText(line + ch).width > maxW) { ctx.fillText(line, cx, yy); line = ch; yy += lh; }
+    else line += ch;
+  }
+  ctx.fillText(line, cx, yy);
+}
+
+function drawBackground(now, st) {
+  const g = ctx.createLinearGradient(0, 0, 0, H);
+  g.addColorStop(0, st.bg[0]); g.addColorStop(1, st.bg[1]);
+  ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+  ctx.fillStyle = 'rgba(255,255,255,.3)';
   for (let y = 40; y < H; y += 60)
     for (let x = ((y * 7) % 40) - (now / 60 % 40); x < W; x += 40) ctx.fillRect(x, y, 14, 3);
+  const d = st.deco;
+  if (d === 'ice') {                       // 氷とふぶき
+    for (let i = 0; i < 7; i++) {
+      const x = mod(i * 140 - now * 0.006 * (1 + i % 3), W + 140) - 70, w = 80 + (i % 3) * 20, h = 8 + (i % 2) * 6;
+      ctx.fillStyle = '#fff'; ctx.fillRect(x, 0, w, h);
+      ctx.fillStyle = '#cfe9f6'; ctx.fillRect(x + 6, h, w - 12, 5);
+    }
+    ctx.fillStyle = 'rgba(255,255,255,.9)';
+    for (const a of AMB) ctx.fillRect(mod(a.x * W - now * 0.02 * a.s, W), mod(a.y * H + now * 0.04 * a.s, H), 2, 2);
+  } else if (d === 'rough') {              // あらい波
+    ctx.strokeStyle = 'rgba(255,255,255,.35)'; ctx.lineWidth = 3;
+    for (let k = 0; k < 6; k++) {
+      ctx.beginPath();
+      for (let x = 0; x <= W; x += 12) {
+        const y = 40 + k * 72 + Math.sin((x + now * 0.08 * (k % 2 ? 1 : -1)) / 34 + k) * 9;
+        if (x) ctx.lineTo(x, y); else ctx.moveTo(x, y);
+      }
+      ctx.stroke();
+    }
+  } else if (d === 'warm') {               // 光の筋とあわ
+    ctx.fillStyle = 'rgba(255,255,255,.13)';
+    for (let i = 0; i < 5; i++) {
+      const bx = 80 + i * 170 + Math.sin(now / 1800 + i) * 30;
+      ctx.beginPath(); ctx.moveTo(bx, 0); ctx.lineTo(bx + 50, 0); ctx.lineTo(bx - 90, H); ctx.lineTo(bx - 170, H); ctx.closePath(); ctx.fill();
+    }
+    ctx.strokeStyle = 'rgba(255,255,255,.6)'; ctx.lineWidth = 1;
+    for (const a of AMB.slice(0, 25)) {
+      ctx.beginPath(); ctx.arc(mod(a.x * W, W) + Math.sin(now / 600 + a.p) * 4, mod(a.y * H - now * 0.03 * a.s, H), 2 + a.s * 2, 0, 7); ctx.stroke();
+    }
+  } else if (d === 'coral') {              // サンゴ礁
+    ctx.fillStyle = '#f3dfa0'; ctx.fillRect(0, H - 12, W, 12);
+    const cols = ['#ff8fab', '#ffb86b', '#c77dff', '#ff6b8b'];
+    for (let i = 0; i < 22; i++) {
+      const x = i * 38 + (i * 13 % 17), h = 22 + ((i * 37) % 46), by = H - 12 - h;
+      ctx.fillStyle = cols[i % 4];
+      ctx.fillRect(x, by, 10, h); ctx.fillRect(x - 8, by + h * 0.3, 8, 6); ctx.fillRect(x + 10, by + h * 0.5, 8, 6);
+      ctx.fillRect(x - 8, by + h * 0.3 - 10, 6, 10); ctx.fillRect(x + 12, by + h * 0.5 - 10, 6, 10);
+    }
+    ctx.fillStyle = 'rgba(255,255,255,.85)';
+    for (const a of AMB.slice(0, 20)) if (Math.sin(now / 300 + a.p) > 0.6) ctx.fillRect(a.x * W, a.y * (H - 60), 3, 3);
+  } else if (d === 'deep') {               // 深海のプランクトン
+    for (const a of AMB) {
+      ctx.fillStyle = 'rgba(140,255,230,' + (0.25 + 0.5 * Math.abs(Math.sin(now / 700 + a.p))).toFixed(2) + ')';
+      ctx.fillRect(mod(a.x * W - now * 0.01 * a.s, W), mod(a.y * H + Math.sin(now / 1500 + a.p) * 20, H), 3, 3);
+    }
+  } else if (d === 'blizzard') {           // 氷山
+    ctx.fillStyle = '#eef6fc';
+    for (let i = 0; i < 4; i++) {
+      const x = i * 230 + 40;
+      ctx.beginPath(); ctx.moveTo(x, H); ctx.lineTo(x + 40, H - 60 - (i % 2) * 30); ctx.lineTo(x + 70, H - 30);
+      ctx.lineTo(x + 110, H - 80 - (i % 3) * 10); ctx.lineTo(x + 150, H); ctx.closePath(); ctx.fill();
+    }
+  }
+}
+
+function drawOverlay(now, st) {
+  if (st.deco === 'fog') {
+    ctx.fillStyle = 'rgba(236,243,248,.22)';
+    for (let i = 0; i < 6; i++) {
+      ctx.beginPath(); ctx.ellipse(mod(i * 260 + now * 0.015 * (1 + i % 2), W + 520) - 260, 50 + i * 70, 200, 46, 0, 0, 7); ctx.fill();
+    }
+  } else if (st.deco === 'deep') {
+    const g = ctx.createRadialGradient(player.x + 70, player.y, 110, player.x + 70, player.y, 470);
+    g.addColorStop(0, 'rgba(0,10,30,0)'); g.addColorStop(1, 'rgba(0,10,30,.55)');
+    ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+  } else if (st.deco === 'blizzard') {
+    ctx.fillStyle = 'rgba(255,255,255,.08)'; ctx.fillRect(0, 0, W, H);
+    ctx.strokeStyle = 'rgba(255,255,255,.75)'; ctx.lineWidth = 1.5;
+    for (const a of AMB) {
+      const x = mod(a.x * W - now * 0.45 * a.s, W), y = mod(a.y * H + now * 0.05 * a.s, H);
+      ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + 14, y - 3); ctx.stroke();
+    }
+  }
+}
+
+function drawCrown(e, S) {
+  const c = e.crown, q = Math.max(3, Math.round(S.scale * 0.7));
+  const cx = e.x - S.w / 2 + S.w * c.x, cy = e.y - S.h / 2 + S.h * c.y;
+  const x0 = Math.round(cx - 3.5 * q), y0 = Math.round(cy - 3 * q);
+  ctx.fillStyle = '#ffd23f';
+  [0, 3, 6].forEach(k => ctx.fillRect(x0 + k * q, y0, q, q));
+  ctx.fillRect(x0, y0 + q, 7 * q, q); ctx.fillRect(x0, y0 + 2 * q, 7 * q, q);
+  ctx.fillStyle = '#e03a3a'; ctx.fillRect(x0 + 3 * q, y0 + 2 * q, q, q);
+}
+
+function drawCards(now, st) {
+  ctx.textAlign = 'center';
+  if (phase === 'intro') {
+    ctx.globalAlpha = Math.min(1, phaseT * 3);
+    ctx.fillStyle = 'rgba(8,24,44,.82)'; ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = '#9fd8ff'; ctx.font = 'bold 22px sans-serif';
+    ctx.fillText('STAGE ' + (stage + 1) + ' / ' + STAGES.length, W / 2, 110);
+    ctx.fillStyle = '#fff'; ctx.font = 'bold 54px sans-serif'; ctx.fillText(st.name, W / 2, 178);
+    ctx.fillStyle = '#e8f4ff'; ctx.font = '18px sans-serif'; wrapText(st.story, W / 2, 240, 540, 30);
+    ctx.fillStyle = '#ffe066'; ctx.font = 'bold 16px sans-serif'; ctx.fillText('この海のボス：' + st.boss.name, W / 2, 350);
+    if (Math.floor(now / 500) % 2) { ctx.fillStyle = '#fff'; ctx.font = '15px sans-serif'; ctx.fillText('クリックでスタート', W / 2, 400); }
+    ctx.globalAlpha = 1;
+  } else if (phase === 'clear' && clearInfo) {
+    ctx.fillStyle = 'rgba(8,24,44,.75)'; ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = '#ffe066'; ctx.font = 'bold 46px sans-serif'; ctx.fillText('STAGE CLEAR!', W / 2, 130);
+    ctx.fillStyle = '#fff'; ctx.font = '20px sans-serif'; ctx.fillText(st.boss.name + ' をたおした！', W / 2, 178);
+    ctx.font = '18px sans-serif'; ctx.fillText('ボーナス +' + clearInfo.bonus, W / 2, 222);
+    if (clearInfo.heal) ctx.fillText('HP かいふく +' + clearInfo.heal, W / 2, 252);
+    ctx.fillStyle = '#9fd8ff'; ctx.font = 'bold 22px sans-serif'; ctx.fillText('つぎの海：' + STAGES[stage + 1].name, W / 2, 310);
+    if (Math.floor(now / 500) % 2) { ctx.fillStyle = '#fff'; ctx.font = '15px sans-serif'; ctx.fillText('クリックですすむ', W / 2, 400); }
+  }
+  if (bossWarn > 0 && phase === 'boss') {
+    if (Math.floor(bossWarn * 6) % 2) {
+      ctx.font = 'bold 52px sans-serif'; ctx.lineWidth = 5; ctx.strokeStyle = '#fff'; ctx.fillStyle = '#d92b2b';
+      ctx.strokeText('WARNING!', W / 2, 200); ctx.fillText('WARNING!', W / 2, 200);
+    }
+    ctx.font = 'bold 22px sans-serif'; ctx.lineWidth = 4; ctx.strokeStyle = '#fff'; ctx.fillStyle = '#123';
+    ctx.strokeText('ボス「' + st.boss.name + '」が近づいてくる…', W / 2, 245); ctx.fillText('ボス「' + st.boss.name + '」が近づいてくる…', W / 2, 245);
+  }
+}
+
+function draw(now) {
+  const st = STAGES[stage];
+  ctx.clearRect(0, 0, W, H);
+  drawBackground(now, st);
 
   // 防衛ライン
   ctx.fillStyle = 'rgba(230,50,50,.35)'; ctx.fillRect(0, 0, LINE_X, H);
@@ -402,15 +738,18 @@ function draw(now) {
 
   // 敵
   ctx.imageSmoothingEnabled = false;
+  if (st.glow) { ctx.shadowColor = 'rgba(255,255,255,.85)'; ctx.shadowBlur = 8; }   // 暗い海でも敵が見えるように
   for (const e of enemies) {
     const S = SPRITES[e.sprite];
     ctx.drawImage(e.flash > 0 ? S.flashImg : S.img, Math.round(e.x - S.w / 2), Math.round(e.y - S.h / 2));
-    if (e.hp < e.maxHp) {
+    if (e.crown) drawCrown(e, S);
+    if (!e.boss && e.hp < e.maxHp) {
       const by = e.y - S.h / 2 - 6;
       ctx.fillStyle = '#789'; ctx.fillRect(e.x - 15, by, 30, 3);
       ctx.fillStyle = '#3c6'; ctx.fillRect(e.x - 15, by, 30 * e.hp / e.maxHp, 3);
     }
   }
+  ctx.shadowBlur = 0;
 
   // 弾（あわ）
   for (const b of bullets) {
@@ -476,6 +815,8 @@ function draw(now) {
     drawBeluga(B, player.x, player.y + Math.round(Math.sin(now / 250) * 2), 'idle', 0, now, false);
   }
 
+  drawOverlay(now, st);
+
   // ふわっと浮かぶ文字
   ctx.font = 'bold 16px sans-serif'; ctx.textAlign = 'center';
   for (const t of texts) {
@@ -486,18 +827,18 @@ function draw(now) {
   ctx.globalAlpha = 1;
 
   // 照準
-  ctx.strokeStyle = 'rgba(0,0,0,.6)'; ctx.lineWidth = 1;
+  ctx.strokeStyle = st.ui; ctx.globalAlpha = 0.7; ctx.lineWidth = 1;
   ctx.beginPath(); ctx.arc(mouse.x, mouse.y, 7, 0, 7);
   ctx.moveTo(mouse.x - 11, mouse.y); ctx.lineTo(mouse.x + 11, mouse.y);
-  ctx.moveTo(mouse.x, mouse.y - 11); ctx.lineTo(mouse.x, mouse.y + 11); ctx.stroke();
+  ctx.moveTo(mouse.x, mouse.y - 11); ctx.lineTo(mouse.x, mouse.y + 11); ctx.stroke(); ctx.globalAlpha = 1;
 
   // HUD
-  ctx.fillStyle = '#123'; ctx.font = 'bold 16px sans-serif'; ctx.textAlign = 'left';
+  ctx.fillStyle = st.ui; ctx.font = 'bold 16px sans-serif'; ctx.textAlign = 'left';
   ctx.fillText('HP', 30, 24);
   for (let i = 0; i < 10; i++) {
     ctx.fillStyle = i < player.hp ? '#e33' : '#9bb'; ctx.fillRect(58 + i * 14, 11, 11, 14);
   }
-  ctx.fillStyle = '#123'; ctx.fillText('SCORE ' + score, 30, 46);
+  ctx.fillStyle = st.ui; ctx.fillText('SCORE ' + score, 30, 46);
 
   ctx.textAlign = 'right';
   if (reloadEnd > now) {
@@ -506,19 +847,37 @@ function draw(now) {
     ctx.fillStyle = '#9bb'; ctx.fillRect(W - 170, 32, 150, 8);
     ctx.fillStyle = '#e80'; ctx.fillRect(W - 170, 32, 150 * p, 8);
   } else {
-    ctx.fillStyle = ammo <= 5 ? '#d22' : '#123';
+    ctx.fillStyle = ammo <= 5 ? '#ff4d4d' : st.ui;
     ctx.fillText('AMMO ' + ammo + ' / ' + MAG, W - 20, 24);
     ctx.fillStyle = '#9bb'; ctx.fillRect(W - 170, 32, 150, 8);
     ctx.fillStyle = '#39c'; ctx.fillRect(W - 170, 32, 150 * ammo / MAG, 8);
   }
-  ctx.textAlign = 'center'; ctx.fillStyle = 'rgba(0,0,0,.45)'; ctx.font = '12px sans-serif';
+  // ステージ表示・進みぐあい／ボスのHP
+  ctx.textAlign = 'center'; ctx.fillStyle = st.ui; ctx.font = 'bold 15px sans-serif';
+  ctx.fillText('STAGE ' + (stage + 1) + '/' + STAGES.length + '　' + st.name, W / 2, 22);
+  if (phase === 'boss' && bossRef && bossRef.hp > 0) {
+    const bw = 260, bx = W / 2 - bw / 2;
+    ctx.fillStyle = 'rgba(0,0,0,.3)'; ctx.fillRect(bx, 30, bw, 10);
+    ctx.fillStyle = '#e33'; ctx.fillRect(bx, 30, bw * bossRef.hp / bossRef.maxHp, 10);
+    ctx.fillStyle = st.ui; ctx.font = 'bold 13px sans-serif'; ctx.fillText(bossRef.name, W / 2, 56);
+  } else if (phase === 'wave') {
+    ctx.fillStyle = 'rgba(0,0,0,.25)'; ctx.fillRect(W / 2 - 100, 30, 200, 6);
+    ctx.fillStyle = '#39c'; ctx.fillRect(W / 2 - 100, 30, 200 * Math.min(1, stageTime / WAVE_DUR), 6);
+  }
+  ctx.globalAlpha = 0.55; ctx.fillStyle = st.ui; ctx.font = '12px sans-serif';
   ctx.fillText('W/S・↑↓ 移動 ／ マウス長押し 連射 ／ R リロード', W / 2, H - 8);
+  ctx.globalAlpha = 1;
+
+  drawCards(now, st);
 
   if (gameOver) {
     ctx.fillStyle = 'rgba(0,0,0,.7)'; ctx.fillRect(0, 0, W, H);
     ctx.fillStyle = '#fff'; ctx.textAlign = 'center';
-    ctx.font = 'bold 40px sans-serif'; ctx.fillText('GAME OVER', W / 2, 70);
+    ctx.font = 'bold 40px sans-serif'; ctx.fillText(cleared ? 'ALL CLEAR!' : 'GAME OVER', W / 2, 70);
     ctx.font = '20px sans-serif'; ctx.fillText('SCORE ' + score, W / 2, 102);
+    ctx.font = '15px sans-serif'; ctx.fillStyle = '#cfe8ff';
+    ctx.fillText(cleared ? '七つの海をわたったベルーガたち。海に平和がもどったよ！' : 'STAGE ' + (stage + 1) + '　' + st.name + ' で力つきた…', W / 2, 128);
+    ctx.fillStyle = '#fff';
     if (!entryActive) {
       ctx.font = 'bold 18px sans-serif'; ctx.fillText('🏆 ランキング（この端末）', W / 2, 150);
       ctx.font = '18px sans-serif';
