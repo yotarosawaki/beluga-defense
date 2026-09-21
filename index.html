@@ -92,7 +92,7 @@ const SPRITES = {
 SPRITES.beluga_s = { scale:2, rows:SPRITES.beluga.rows };
 SPRITES.beluga_l = { scale:4, rows:SPRITES.beluga.rows };
 // 光るイカ（仲間を呼ぶアイテム）
-SPRITES.squid = { scale:3, rows:[
+SPRITES.squid = { scale:5, rows:[
   ".....qq.....",
   "...qqYYqq...",
   "..qYYYYYYq..",
@@ -105,8 +105,8 @@ SPRITES.squid = { scale:3, rows:[
   "..qYqYYqYq..",
   "..q.q..q.q.."] };
 // 撃つたびに色が変わる（黄 → ピンク → 水色）
-SPRITES.squid1 = { scale:3, rows:SPRITES.squid.rows.map(r => r.replace(/Y/g, 'A').replace(/q/g, 'B')) };
-SPRITES.squid2 = { scale:3, rows:SPRITES.squid.rows.map(r => r.replace(/Y/g, 'C').replace(/q/g, 'D')) };
+SPRITES.squid1 = { scale:5, rows:SPRITES.squid.rows.map(r => r.replace(/Y/g, 'A').replace(/q/g, 'B')) };
+SPRITES.squid2 = { scale:5, rows:SPRITES.squid.rows.map(r => r.replace(/Y/g, 'C').replace(/q/g, 'D')) };
 const SQUID_LOOK = [
   { sprite:'squid',  glow:'255,240,120', chip:'#ffe066' },
   { sprite:'squid1', glow:'255,150,210', chip:'#ff8cc8' },
@@ -252,7 +252,7 @@ function updateAllies(dt, now) {
     q.flash = Math.max(0, (q.flash || 0) - dt);
     for (const b of bullets) {
       if (q.got || b.dead) continue;
-      if (Math.abs(b.x - q.x) < sw / 2 + 14 && Math.abs(b.y - q.by) < sh / 2 + 16) {
+      if (Math.abs(b.x - q.x) < sw / 2 + 22 && Math.abs(b.y - q.by) < sh / 2 + 24) {
         b.dead = true; q.hits = (q.hits || 0) + 1; q.flash = 0.15;
         burst(q.x, q.by, SQUID_LOOK[Math.min(q.hits, SQUID_HITS - 1)].chip, 12, 170);
         if (q.hits >= SQUID_HITS) collectSquid(q);
@@ -440,7 +440,7 @@ function draw(now) {
   // イカ（光るアイテム）
   for (const q of squids) {
     const look = SQUID_LOOK[Math.min(q.hits || 0, SQUID_HITS - 1)], S = SPRITES[look.sprite];
-    const pulse = 0.5 + 0.5 * Math.sin(q.t * 5), gr = 38 + pulse * 10 + (q.flash ? 14 : 0);
+    const pulse = 0.5 + 0.5 * Math.sin(q.t * 5), gr = 62 + pulse * 12 + (q.flash ? 14 : 0);
     const g = ctx.createRadialGradient(q.x, q.by, 4, q.x, q.by, gr);
     g.addColorStop(0, 'rgba(' + look.glow + ',.85)'); g.addColorStop(1, 'rgba(' + look.glow + ',0)');
     ctx.fillStyle = g; ctx.fillRect(q.x - gr, q.by - gr, gr * 2, gr * 2);
