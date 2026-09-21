@@ -34,6 +34,7 @@ const PAL = {
   W:'#ffffff', l:'#d6e6f2', b:'#7f9fb8', k:'#1f2a38', p:'#ff9fb5', s:'#c5d9e6',
   g:'#8aa8c0', G:'#5f7f9a', w:'#f4fbff', t:'#ffffff', x:'#1f2a38', o:'#8fa9bd',
   Y:'#fff6a8', y:'#ffd84d', q:'#e0a800', h:'#ffffff',
+  A:'#ffc4e2', B:'#e0559c', C:'#b8f5ff', D:'#2aa5c8',
 };
 const SPRITES = {
   beluga: { scale:3, rows:[
@@ -103,6 +104,15 @@ SPRITES.squid = { scale:3, rows:[
   "..qYqYYqYq..",
   "..qYqYYqYq..",
   "..q.q..q.q.."] };
+// 撃つたびに色が変わる（黄 → ピンク → 水色）
+SPRITES.squid1 = { scale:3, rows:SPRITES.squid.rows.map(r => r.replace(/Y/g, 'A').replace(/q/g, 'B')) };
+SPRITES.squid2 = { scale:3, rows:SPRITES.squid.rows.map(r => r.replace(/Y/g, 'C').replace(/q/g, 'D')) };
+const SQUID_LOOK = [
+  { sprite:'squid',  glow:'255,240,120', chip:'#ffe066' },
+  { sprite:'squid1', glow:'255,150,210', chip:'#ff8cc8' },
+  { sprite:'squid2', glow:'120,230,255', chip:'#5ad8f5' },
+];
+const SQUID_HITS = 3;
 for (const S of Object.values(SPRITES)) {
   const w = Math.max(...S.rows.map(r => r.length)), h = S.rows.length;
   S.w = w * S.scale; S.h = h * S.scale;
@@ -216,6 +226,13 @@ function addAlly(kind) {
   floatText(player.x + 50, player.y - 40, 'なかまが来た！', '#e8890c');
 }
 
+function collectSquid(q) {
+  q.got = true;
+  const missing = ['small', 'large'].filter(k => !allies.some(a => a.kind === k));
+  if (missing.length) addAlly(missing[0]);
+  burst(q.x, q.by, '#ffe066', 22, 200);
+}
+
 function updateAllies(dt, now) {
   // イカの出現：仲間が足りないときだけ、一定間隔で右から流れてくる
   if (allies.length < 2 && !squids.length) squidTimer -= dt;
@@ -229,10 +246,17 @@ function updateAllies(dt, now) {
     // ベルーガが触れたらゲット
     const sw = SPRITES.squid.w, sh = SPRITES.squid.h;
     if (!q.got && Math.abs(q.x - player.x) < sw / 2 + player.w / 2 - 6 && Math.abs(q.by - player.y) < sh / 2 + player.h / 2 - 4) {
-      q.got = true;
-      const missing = ['small', 'large'].filter(k => !allies.some(a => a.kind === k));
-      if (missing.length) addAlly(missing[0]);
-      burst(q.x, q.by, '#ffe066', 22, 200);
+      collectSquid(q);
+    }
+    // バブルを3回当てても仲間になる（当てるたびに色が変わる）
+    q.flash = Math.max(0, (q.flash || 0) - dt);
+    for (const b of bullets) {
+      if (q.got || b.dead) continue;
+      if (Math.abs(b.x - q.x) < sw / 2 + 2 && Math.abs(b.y - q.by) < sh / 2 + 2) {
+        b.dead = true; q.hits = (q.hits || 0) + 1; q.flash = 0.15;
+        burst(q.x, q.by, SQUID_LOOK[Math.min(q.hits, SQUID_HITS - 1)].chip, 12, 170);
+        if (q.hits >= SQUID_HITS) collectSquid(q);
+      }
     }
   }
   squids = squids.filter(q => !q.got && q.x > -60);
@@ -415,11 +439,17 @@ function draw(now) {
 
   // イカ（光るアイテム）
   for (const q of squids) {
-    const S = SPRITES.squid, pulse = 0.5 + 0.5 * Math.sin(q.t * 5), gr = 38 + pulse * 10;
+    const look = SQUID_LOOK[Math.min(q.hits || 0, SQUID_HITS - 1)], S = SPRITES[look.sprite];
+    const pulse = 0.5 + 0.5 * Math.sin(q.t * 5), gr = 38 + pulse * 10 + (q.flash ? 14 : 0);
     const g = ctx.createRadialGradient(q.x, q.by, 4, q.x, q.by, gr);
-    g.addColorStop(0, 'rgba(255,240,120,.85)'); g.addColorStop(1, 'rgba(255,240,120,0)');
+    g.addColorStop(0, 'rgba(' + look.glow + ',.85)'); g.addColorStop(1, 'rgba(' + look.glow + ',0)');
     ctx.fillStyle = g; ctx.fillRect(q.x - gr, q.by - gr, gr * 2, gr * 2);
-    ctx.drawImage(S.img, Math.round(q.x - S.w / 2), Math.round(q.by - S.h / 2));
+    ctx.drawImage(q.flash > 0 ? S.flashImg : S.img, Math.round(q.x - S.w / 2), Math.round(q.by - S.h / 2));
+    // 残りあと何回か（●が当てた回数）
+    for (let i = 0; i < SQUID_HITS; i++) {
+      ctx.fillStyle = i < (q.hits || 0) ? '#ff5fa8' : 'rgba(255,255,255,.8)'; ctx.strokeStyle = '#c90'; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.arc(q.x + (i - 1) * 10, q.by - S.h / 2 - 8, 3.5, 0, 7); ctx.fill(); ctx.stroke();
+    }
     ctx.fillStyle = '#fff';
     const sx = Math.sin(q.t * 4) * 26, sy = Math.cos(q.t * 3) * 20;
     ctx.fillRect(Math.round(q.x + sx), Math.round(q.by + sy), 3, 3);
