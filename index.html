@@ -1,0 +1,383 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<title>ベルーガ防衛戦</title>
+<style>
+  body { margin:0; background:#16324a; display:flex; justify-content:center; align-items:center; height:100vh; }
+  #wrap { position:relative; line-height:0; }
+  #entry { display:none; position:absolute; left:50%; top:58%; transform:translate(-50%,-50%); text-align:center; color:#fff; font:16px sans-serif; line-height:1.6; }
+  #entry p { margin:0 0 8px; font-size:20px; font-weight:bold; }
+  #entry input { font-size:18px; padding:6px 10px; width:150px; border-radius:6px; border:2px solid #5aa9d6; }
+  #entry button { font-size:18px; padding:6px 16px; margin-left:6px; border-radius:6px; border:0; background:#5aa9d6; color:#fff; cursor:pointer; }
+  #entry small { display:block; margin-top:8px; color:#ffd; }
+  canvas { background:#bfe6f5; cursor:crosshair; border:2px solid #345; max-width:100vw; max-height:100vh; image-rendering:pixelated; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <canvas id="c" width="800" height="450"></canvas>
+  <div id="entry">
+    <p>ランキングに登録しよう！</p>
+    <input id="name" maxlength="8" placeholder="ニックネーム" autocomplete="off">
+    <button id="ok">登録</button>
+    <small>※本名などの個人名は入れないでね</small>
+  </div>
+</div>
+<script>
+const cv = document.getElementById('c'), ctx = cv.getContext('2d');
+const W = 800, H = 450, LINE_X = 14;
+const MAG = 20, RELOAD_TIME = 2000, FIRE_INTERVAL = 100, BULLET_SPEED = 720;
+
+// ---- ドット絵 ----
+const PAL = {
+  W:'#ffffff', l:'#d6e6f2', b:'#7f9fb8', k:'#1f2a38', p:'#ff9fb5', s:'#c5d9e6',
+  g:'#8aa8c0', G:'#5f7f9a', w:'#f4fbff', t:'#ffffff', x:'#1f2a38', o:'#8fa9bd',
+};
+const SPRITES = {
+  beluga: { scale:3, rows:[
+    "...........bbbbb....",
+    ".........bbWWWWWbb..",
+    "b.......bWWWWWWWWWb.",
+    "bb.....bWWWWWWWWWWWb",
+    ".bb...bWWWWWWkkWWWWb",
+    "..bb.bWWWWWWWkkWWWWb",
+    "..bbbWWWWWWWWWWWWWWb",
+    "...bWWWWWWWppWWWpWWb",
+    "...bWWWWWWlllWWWWWb.",
+    "....bWWWllWWWWWWbb..",
+    ".....bbbbbbbbbbb...."] },
+  shark: { scale:2, rows:[
+    "........GG.............",
+    ".......GgG..........GG.",
+    "......GggG.........GgG.",
+    "..GGGGGGGGGGGG...GGgG..",
+    ".GggkkgggggggGGGGGgg...",
+    "Gggkkkggggggggggggg....",
+    "Gpggggggggggggggggg....",
+    "GwtwtwwwwwwwwwwGGgG....",
+    ".GwwwwwwwwwwwGGG.GG....",
+    "..GGGGGGGGGGG.....G...."] },
+  orca: { scale:2, rows:[
+    "........kk.............",
+    ".......kkkk.........kk.",
+    "......kkkkk........kkk.",
+    "..kkkkkkkkkkkk...kkkk..",
+    ".kkwwkkkkkkkkkkkkkkk...",
+    "kkwxwkkkkkkkkkkkkkk....",
+    "kpkkkkkkkkkkkkkkkkk....",
+    "kwwwwwwwwwwkkkkkkkk....",
+    ".kwwwwwwwwwwkkk.kk.....",
+    "..kkkkkkkkkkk....k....."] },
+  bear: { scale:4, rows:[
+    ".oo.oo.............",
+    "oWWoWWo............",
+    "oWWWWWWo...........",
+    "oWkWWkWWooooooooo..",
+    "oWWWWWWWWWWWWWWWWo.",
+    ".oWpkkpWWWWWWWWWWWo",
+    "..oWWWWWWWWWWWWWWWo",
+    "..oWWWWWWWWWWWWWWWo",
+    "...oWWWWWWWWWWWWWWo",
+    "...oWWWWWWWWWWWWWWo",
+    "...oWWWWWWWWWWWWWo.",
+    "...oWWWssWWWWssWWo.",
+    "...oWWWo.oWWWWo.oo.",
+    "...oWWWo.oWWWWo....",
+    "...ooooo.oooooo...."] },
+};
+for (const S of Object.values(SPRITES)) {
+  const w = Math.max(...S.rows.map(r => r.length)), h = S.rows.length;
+  S.w = w * S.scale; S.h = h * S.scale;
+  for (const flash of [false, true]) {
+    const c = document.createElement('canvas'); c.width = S.w; c.height = S.h;
+    const g = c.getContext('2d');
+    S.rows.forEach((row, y) => [...row].forEach((ch, x) => {
+      if (ch === '.' || !PAL[ch]) return;
+      g.fillStyle = flash ? '#fff' : PAL[ch];
+      g.fillRect(x * S.scale, y * S.scale, S.scale, S.scale);
+    }));
+    S[flash ? 'flashImg' : 'img'] = c;
+  }
+  // 赤みがかった「いたい」用
+  const hc = document.createElement('canvas'); hc.width = S.w; hc.height = S.h;
+  const hg = hc.getContext('2d'); hg.drawImage(S.img, 0, 0);
+  hg.globalCompositeOperation = 'source-atop'; hg.fillStyle = 'rgba(255,60,60,.55)'; hg.fillRect(0, 0, S.w, S.h);
+  S.hurtImg = hc;
+}
+
+// 敵: サメ(通常) / シャチ(高速) / シロクマ(大型)
+const TYPES = {
+  normal: { sprite:'shark', w:40, h:20, hp:3,  speed:45,  chip:'#8aa8c0', dmg:1, score:10 },
+  fast:   { sprite:'orca',  w:40, h:20, hp:1,  speed:110, chip:'#3a4a5e', dmg:1, score:15 },
+  big:    { sprite:'bear',  w:66, h:56, hp:20, speed:20,  chip:'#ffffff', dmg:3, score:50 },
+};
+
+const player = { x:52, y:H/2, w:60, h:33, speed:260, hp:10 };
+let bullets, enemies, particles, ammo, reloadEnd, lastShot, spawnTimer, elapsed, score, gameOver;
+const keys = {}, mouse = { x:W/2, y:H/2, down:false };
+
+function reset() {
+  bullets = []; enemies = []; particles = [];
+  ammo = MAG; reloadEnd = 0; lastShot = 0; spawnTimer = 1;
+  elapsed = 0; score = 0; gameOver = false; player.hp = 10; player.y = H/2; player.hurtUntil = 0;
+}
+reset();
+
+// ---- ランキング（この端末のブラウザに保存）----
+const RANK_KEY = 'beluga-defense-ranking', RANK_MAX = 5;
+let ranking = [], lastRank = -1, entryActive = false;
+try { ranking = JSON.parse(localStorage.getItem(RANK_KEY)) || []; } catch (e) {}
+function saveRanking() { try { localStorage.setItem(RANK_KEY, JSON.stringify(ranking)); } catch (e) {} }
+const entryEl = document.getElementById('entry'), nameEl = document.getElementById('name');
+
+function onGameOver() {
+  lastRank = -1;
+  const qualifies = score > 0 && (ranking.length < RANK_MAX || score > ranking[ranking.length - 1].score);
+  if (!qualifies) return;
+  entryActive = true; entryEl.style.display = 'block'; nameEl.value = ''; nameEl.focus();
+}
+function submitEntry() {
+  if (!entryActive) return;
+  const entry = { name: nameEl.value.trim().slice(0, 8) || 'ななし', score };
+  ranking.push(entry);
+  ranking.sort((a, b) => b.score - a.score);
+  lastRank = ranking.indexOf(entry);
+  ranking = ranking.slice(0, RANK_MAX);
+  saveRanking();
+  entryActive = false; entryEl.style.display = 'none'; nameEl.blur();
+}
+document.getElementById('ok').addEventListener('click', submitEntry);
+nameEl.addEventListener('keydown', e => { if (e.key === 'Enter') submitEntry(); });
+
+addEventListener('keydown', e => {
+  if (e.target === nameEl) return;   // 名前入力中はゲーム操作を無視
+  keys[e.key.toLowerCase()] = true;
+  if (['arrowup','arrowdown'].includes(e.key.toLowerCase())) e.preventDefault();
+  if (e.key.toLowerCase() === 'r') { if (gameOver) { if (!entryActive) reset(); } else startReload(performance.now()); }
+});
+addEventListener('keyup', e => keys[e.key.toLowerCase()] = false);
+function setMouse(e) {
+  const r = cv.getBoundingClientRect();
+  mouse.x = (e.clientX - r.left) * W / r.width;
+  mouse.y = (e.clientY - r.top) * H / r.height;
+}
+cv.addEventListener('mousemove', setMouse);
+cv.addEventListener('mousedown', e => { setMouse(e); mouse.down = true; if (gameOver && !entryActive) reset(); });
+addEventListener('mouseup', () => mouse.down = false);
+
+function startReload(now) {
+  if (reloadEnd <= now && ammo < MAG) reloadEnd = now + RELOAD_TIME;
+}
+
+function shoot(now) {
+  if (now < reloadEnd || now - lastShot < FIRE_INTERVAL) return;
+  lastShot = now;
+  const ox = player.x + 26, oy = player.y - 3;
+  const a = Math.atan2(mouse.y - oy, mouse.x - ox) + (Math.random() - .5) * 0.04;
+  bullets.push({ age:0, x:ox, y:oy, vx:Math.cos(a) * BULLET_SPEED, vy:Math.sin(a) * BULLET_SPEED });
+  if (--ammo <= 0) reloadEnd = now + RELOAD_TIME;
+}
+
+function spawnEnemy() {
+  const r = Math.random();
+  const big = Math.min(0.05 + elapsed / 600, 0.2), fast = Math.min(0.2 + elapsed / 300, 0.4);
+  const key = r < big ? 'big' : r < big + fast ? 'fast' : 'normal';
+  const t = TYPES[key];
+  enemies.push({ type:key, ...t, maxHp:t.hp, x:W + t.w, y:t.h/2 + 10 + Math.random() * (H - t.h - 20), flash:0 });
+}
+
+function burst(x, y, color, n, spd) {
+  for (let i = 0; i < n; i++) {
+    const a = Math.random() * Math.PI * 2, s = spd * (0.3 + Math.random());
+    particles.push({ x, y, vx:Math.cos(a) * s, vy:Math.sin(a) * s, life:0.5 + Math.random() * 0.5,
+                     size:1.5 + Math.random() * 3, color, rot:Math.random() * 6 });
+  }
+}
+
+function update(dt, now) {
+  if (gameOver) return;
+  elapsed += dt;
+
+  if (keys['w'] || keys['arrowup']) player.y -= player.speed * dt;
+  if (keys['s'] || keys['arrowdown']) player.y += player.speed * dt;
+  player.y = Math.max(player.h/2, Math.min(H - player.h/2, player.y));
+
+  if (reloadEnd && now >= reloadEnd) { ammo = MAG; reloadEnd = 0; }
+  if (mouse.down) shoot(now);
+
+  spawnTimer -= dt;
+  if (spawnTimer <= 0) {
+    spawnEnemy();
+    spawnTimer = Math.max(0.35, 1.4 - elapsed / 60) * (0.6 + Math.random() * 0.8);
+  }
+
+  for (const b of bullets) { b.x += b.vx * dt; b.y += b.vy * dt; b.age += dt; }
+  for (const e of enemies) {
+    e.x -= e.speed * dt;
+    e.flash = Math.max(0, e.flash - dt);
+  }
+
+  // 弾 vs 敵
+  for (const b of bullets) {
+    for (const e of enemies) {
+      if (e.hp <= 0) continue;
+      if (Math.abs(b.x - e.x) < e.w/2 + 3 && Math.abs(b.y - e.y) < e.h/2 + 3) {
+        b.dead = true;
+        e.hp--; e.flash = 0.08;
+        e.x += e.type === 'big' ? 6 : 14;   // ノックバック
+        burst(b.x, b.y, '#fff', 3, 120);
+        if (e.hp <= 0) { score += e.score; burst(e.x, e.y, e.chip, e.type === 'big' ? 40 : 16, 220); }
+        break;
+      }
+    }
+  }
+  bullets = bullets.filter(b => !b.dead && b.x > -10 && b.x < W + 10 && b.y > -10 && b.y < H + 10);
+
+  // 防衛ライン到達
+  for (const e of enemies) {
+    if (e.hp > 0 && e.x - e.w/2 <= LINE_X) {
+      player.hp -= e.dmg; e.hp = 0; player.hurtUntil = now + 700;
+      burst(LINE_X + 4, e.y, '#ff6b6b', 12, 160);
+      if (player.hp <= 0) { player.hp = 0; gameOver = true; onGameOver(); }
+    }
+  }
+  enemies = enemies.filter(e => e.hp > 0);
+
+  for (const p of particles) {
+    p.x += p.vx * dt; p.y += p.vy * dt; p.vy += 300 * dt; p.vx *= 0.98; p.life -= dt; p.rot += dt * 8;
+  }
+  particles = particles.filter(p => p.life > 0);
+}
+
+function draw(now) {
+  ctx.clearRect(0, 0, W, H);
+  // 水面のさざ波
+  ctx.fillStyle = 'rgba(255,255,255,.35)';
+  for (let y = 40; y < H; y += 60)
+    for (let x = ((y * 7) % 40) - (now / 60 % 40); x < W; x += 40) ctx.fillRect(x, y, 14, 3);
+
+  // 防衛ライン
+  ctx.fillStyle = 'rgba(230,50,50,.35)'; ctx.fillRect(0, 0, LINE_X, H);
+  ctx.strokeStyle = '#e33'; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(LINE_X, 0); ctx.lineTo(LINE_X, H); ctx.stroke();
+
+  // 敵
+  ctx.imageSmoothingEnabled = false;
+  for (const e of enemies) {
+    const S = SPRITES[e.sprite];
+    ctx.drawImage(e.flash > 0 ? S.flashImg : S.img, Math.round(e.x - S.w / 2), Math.round(e.y - S.h / 2));
+    if (e.hp < e.maxHp) {
+      const by = e.y - S.h / 2 - 6;
+      ctx.fillStyle = '#789'; ctx.fillRect(e.x - 15, by, 30, 3);
+      ctx.fillStyle = '#3c6'; ctx.fillRect(e.x - 15, by, 30 * e.hp / e.maxHp, 3);
+    }
+  }
+
+  // 弾（あわ）
+  for (const b of bullets) {
+    // バブルリング：進むほど少し広がる
+    const r = 4 + Math.min(3, b.age * 6);
+    ctx.fillStyle = 'rgba(200,240,255,.22)';
+    ctx.beginPath(); ctx.arc(b.x, b.y, r, 0, 7); ctx.fill();
+    ctx.strokeStyle = 'rgba(90,169,214,.9)'; ctx.lineWidth = 2.5;
+    ctx.beginPath(); ctx.arc(b.x, b.y, r, 0, 7); ctx.stroke();
+    ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.2;
+    ctx.beginPath(); ctx.arc(b.x, b.y, r - 1.2, 0, 7); ctx.stroke();
+    ctx.lineWidth = 1.5; ctx.beginPath(); ctx.arc(b.x, b.y, r - 2.5, Math.PI * 1.1, Math.PI * 1.6); ctx.stroke();
+  }
+
+  // パーティクル
+  for (const p of particles) {
+    ctx.save(); ctx.globalAlpha = Math.min(1, p.life * 2);
+    ctx.translate(p.x, p.y); ctx.rotate(p.rot);
+    ctx.fillStyle = p.color; ctx.fillRect(-p.size, -p.size / 2, p.size * 2, p.size);
+    ctx.restore();
+  }
+
+  // プレイヤー（ベルーガ）
+  const B = SPRITES.beluga, hurt = player.hurtUntil > now;
+  const bob = Math.round(Math.sin(now / 250) * 2);
+  if (hurt) {
+    const t = (player.hurtUntil - now) / 700;            // 1 → 0
+    const sx = Math.round(Math.sin(now / 20) * 4 * t);   // ぶるぶる震える
+    const bx = Math.round(player.x - B.w / 2) + sx - Math.round(6 * t);  // 少しのけぞる
+    const by = Math.round(player.y - B.h / 2) - Math.round(Math.sin((1 - t) * Math.PI) * 4);
+    ctx.drawImage(Math.floor(now / 70) % 2 ? B.hurtImg : B.img, bx, by);
+    // 目を「> <」風にぎゅっと閉じて、なみだ
+    ctx.fillStyle = '#fff'; ctx.fillRect(bx + 36, by + 12, 9, 9);
+    ctx.fillStyle = '#1f2a38';
+    ctx.fillRect(bx + 39, by + 12, 3, 3); ctx.fillRect(bx + 42, by + 15, 3, 3); ctx.fillRect(bx + 39, by + 18, 3, 3);
+    ctx.fillStyle = '#5aa9d6'; ctx.fillRect(bx + 45, by + 21, 3, 3); ctx.fillRect(bx + 45, by + 27 - Math.round(t * 3), 3, 3);
+    // 「いたっ！」
+    ctx.font = 'bold 18px sans-serif'; ctx.textAlign = 'left';
+    const ty = by - 8 - (1 - t) * 14;
+    ctx.globalAlpha = Math.min(1, t * 2);
+    ctx.lineWidth = 4; ctx.strokeStyle = '#fff'; ctx.strokeText('いたっ！', bx + 20, ty);
+    ctx.fillStyle = '#e33'; ctx.fillText('いたっ！', bx + 20, ty);
+    ctx.globalAlpha = 1;
+  } else {
+    ctx.drawImage(B.img, Math.round(player.x - B.w / 2), Math.round(player.y - B.h / 2) + bob);
+  }
+
+  // 照準
+  ctx.strokeStyle = 'rgba(0,0,0,.6)'; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.arc(mouse.x, mouse.y, 7, 0, 7);
+  ctx.moveTo(mouse.x - 11, mouse.y); ctx.lineTo(mouse.x + 11, mouse.y);
+  ctx.moveTo(mouse.x, mouse.y - 11); ctx.lineTo(mouse.x, mouse.y + 11); ctx.stroke();
+
+  // HUD
+  ctx.fillStyle = '#123'; ctx.font = 'bold 16px sans-serif'; ctx.textAlign = 'left';
+  ctx.fillText('HP', 30, 24);
+  for (let i = 0; i < 10; i++) {
+    ctx.fillStyle = i < player.hp ? '#e33' : '#9bb'; ctx.fillRect(58 + i * 14, 11, 11, 14);
+  }
+  ctx.fillStyle = '#123'; ctx.fillText('SCORE ' + score, 30, 46);
+
+  ctx.textAlign = 'right';
+  if (reloadEnd > now) {
+    const p = 1 - (reloadEnd - now) / RELOAD_TIME;
+    ctx.fillStyle = '#b55a00'; ctx.fillText('潜って息つぎ中…', W - 20, 24);
+    ctx.fillStyle = '#9bb'; ctx.fillRect(W - 170, 32, 150, 8);
+    ctx.fillStyle = '#e80'; ctx.fillRect(W - 170, 32, 150 * p, 8);
+  } else {
+    ctx.fillStyle = ammo <= 5 ? '#d22' : '#123';
+    ctx.fillText('AMMO ' + ammo + ' / ' + MAG, W - 20, 24);
+    ctx.fillStyle = '#9bb'; ctx.fillRect(W - 170, 32, 150, 8);
+    ctx.fillStyle = '#39c'; ctx.fillRect(W - 170, 32, 150 * ammo / MAG, 8);
+  }
+  ctx.textAlign = 'center'; ctx.fillStyle = 'rgba(0,0,0,.45)'; ctx.font = '12px sans-serif';
+  ctx.fillText('W/S・↑↓ 移動 ／ マウス長押し 連射 ／ R リロード', W / 2, H - 8);
+
+  if (gameOver) {
+    ctx.fillStyle = 'rgba(0,0,0,.7)'; ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = '#fff'; ctx.textAlign = 'center';
+    ctx.font = 'bold 40px sans-serif'; ctx.fillText('GAME OVER', W / 2, 70);
+    ctx.font = '20px sans-serif'; ctx.fillText('SCORE ' + score, W / 2, 102);
+    if (!entryActive) {
+      ctx.font = 'bold 18px sans-serif'; ctx.fillText('🏆 ランキング（この端末）', W / 2, 150);
+      ctx.font = '18px sans-serif';
+      if (!ranking.length) ctx.fillText('まだ記録がありません', W / 2, 195);
+      ranking.forEach((r, i) => {
+        const y = 188 + i * 30, me = i === lastRank;
+        if (me) { ctx.fillStyle = 'rgba(255,224,102,.25)'; ctx.fillRect(W / 2 - 170, y - 20, 340, 26); }
+        ctx.fillStyle = me ? '#ffe066' : '#fff';
+        ctx.textAlign = 'left';  ctx.fillText((i + 1) + '位', W / 2 - 155, y);
+        ctx.fillText(r.name, W / 2 - 90, y);
+        ctx.textAlign = 'right'; ctx.fillText(r.score, W / 2 + 155, y);
+      });
+      ctx.fillStyle = '#fff'; ctx.textAlign = 'center';
+      ctx.fillText('クリックまたは R でリトライ', W / 2, 400);
+    }
+  }
+}
+
+let last = performance.now();
+function loop(now) {
+  const dt = Math.min(0.05, (now - last) / 1000); last = now;
+  update(dt, now); draw(now);
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
