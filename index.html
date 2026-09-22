@@ -522,13 +522,20 @@ function addAlly(kind) {
 function collectSquid(q) {
   q.got = true;
   const missing = ['small', 'large'].filter(k => !allies.some(a => a.kind === k));
-  if (missing.length) addAlly(missing[0]);
+  if (missing.length) {
+    addAlly(missing[0]);
+  } else {
+    // 仲間が2匹そろっていても、ボーナスとして出続ける
+    const heal = Math.min(1, 10 - player.hp);
+    player.hp += heal; score += 50;
+    floatText(q.x, q.by - 20, heal ? 'ボーナス +50＆HP回復！' : 'ボーナス +50！', '#ffe066');
+  }
   burst(q.x, q.by, '#ffe066', 22, 200);
 }
 
 function updateAllies(dt, now) {
-  // イカの出現：仲間が足りないときだけ、一定間隔で右から流れてくる
-  if (allies.length < 2 && !squids.length) squidTimer -= dt;
+  // イカの出現：仲間がそろっていても、一定間隔で右から流れてくる（そろっているときはボーナス用）
+  if (!squids.length) squidTimer -= dt;
   if (squidTimer <= 0) {
     squids.push({ x:W + 40, y:70 + Math.random() * (H - 140), t:Math.random() * 6 });
     squidTimer = 8 + Math.random() * 4;
