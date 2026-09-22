@@ -31,6 +31,7 @@
     <p>ランキングに登録しよう！</p>
     <input id="name" maxlength="8" placeholder="ニックネーム" autocomplete="off">
     <button id="ok">登録</button>
+    <button id="skip" style="background:#789;">とばす</button>
     <small>※本名などの個人名は入れないでね</small>
   </div>
   <button id="fsbtn" title="全画面">⛶</button>
@@ -40,6 +41,8 @@
   <div>スマホを<b>横向き</b>にして<br>あそんでね</div>
   <button id="fs">全画面で遊ぶ</button>
 </div>
+<script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore-compat.js"></script>
 <script>
 const cv = document.getElementById('c'), ctx = cv.getContext('2d');
 const W = 800, H = 450, LINE_X = 14;
@@ -255,30 +258,70 @@ function reset() {
 }
 reset();
 
-// ---- ランキング（この端末のブラウザに保存）----
-const RANK_KEY = 'beluga-defense-ranking', RANK_MAX = 5;
-let ranking = [], lastRank = -1, entryActive = false;
-try { ranking = JSON.parse(localStorage.getItem(RANK_KEY)) || []; } catch (e) {}
-function saveRanking() { try { localStorage.setItem(RANK_KEY, JSON.stringify(ranking)); } catch (e) {} }
-const entryEl = document.getElementById('entry'), nameEl = document.getElementById('name');
+// ---- ランキング ----
+// FIREBASE_CONFIG を設定すると「みんなのランキング」（Firestore）に、未設定なら今までどおり端末内だけに保存する。
+const FIREBASE_CONFIG = {
+  apiKey: "YOUR_API_KEY",
+  authDomain: "YOUR_PROJECT.firebaseapp.com",
+  projectId: "YOUR_PROJECT",
+};
+const FIREBASE_ON = !!(FIREBASE_CONFIG.apiKey && !FIREBASE_CONFIG.apiKey.startsWith('YOUR_') && window.firebase);
+let db = null;
+if (FIREBASE_ON) { try { firebase.initializeApp(FIREBASE_CONFIG); db = firebase.firestore(); } catch (e) { db = null; } }
+
+const RANK_KEY = 'beluga-defense-ranking', RANK_MAX = 10;
+let ranking = [], lastRank = -1, entryActive = false, rankLoading = false, rankError = '';
+function loadLocalRanking() { try { ranking = JSON.parse(localStorage.getItem(RANK_KEY)) || []; } catch (e) { ranking = []; } }
+function saveLocalRanking(list) { try { localStorage.setItem(RANK_KEY, JSON.stringify(list)); } catch (e) {} }
+loadLocalRanking();
+
+async function refreshRanking() {
+  if (!db) return;
+  rankLoading = true; rankError = '';
+  try {
+    const snap = await db.collection('scores').orderBy('score', 'desc').limit(RANK_MAX).get();
+    ranking = snap.docs.map(d => ({ name: d.data().name, score: d.data().score }));
+  } catch (e) {
+    rankError = 'よみこめなかったよ（端末内の記録を表示）'; loadLocalRanking();
+  }
+  rankLoading = false;
+}
+refreshRanking();
+
+const entryEl = document.getElementById('entry'), nameEl = document.getElementById('name'), entryTitleEl = entryEl.querySelector('p');
 
 function onGameOver() {
   lastRank = -1;
-  const qualifies = score > 0 && (ranking.length < RANK_MAX || score > ranking[ranking.length - 1].score);
-  if (!qualifies) return;
+  if (score <= 0) return;
+  if (!db) {   // 端末内ランキングのときは、上位に入ったときだけ登録をすすめる
+    const qualifies = ranking.length < RANK_MAX || score > ranking[ranking.length - 1].score;
+    if (!qualifies) return;
+  }
+  entryTitleEl.textContent = db ? 'みんなのランキングに登録しよう！' : 'ランキングに登録しよう！';
   entryActive = true; entryEl.style.display = 'block'; nameEl.value = ''; nameEl.focus();
 }
-function submitEntry() {
+function closeEntry() { entryActive = false; entryEl.style.display = 'none'; nameEl.blur(); }
+function skipEntry() { closeEntry(); }
+async function submitEntry() {
   if (!entryActive) return;
-  const entry = { name: nameEl.value.trim().slice(0, 8) || 'ななし', score };
-  ranking.push(entry);
-  ranking.sort((a, b) => b.score - a.score);
-  lastRank = ranking.indexOf(entry);
-  ranking = ranking.slice(0, RANK_MAX);
-  saveRanking();
-  entryActive = false; entryEl.style.display = 'none'; nameEl.blur();
+  const name = nameEl.value.trim().slice(0, 8) || 'ななし', entry = { name, score };
+  closeEntry();
+  // 端末内にも常に残す（通信できないときの保険）
+  const local = JSON.parse(localStorage.getItem(RANK_KEY) || '[]');
+  local.push(entry); local.sort((a, b) => b.score - a.score);
+  saveLocalRanking(local.slice(0, RANK_MAX));
+  if (db) {
+    try {
+      await db.collection('scores').add({ name, score, createdAt: firebase.firestore.FieldValue.serverTimestamp() });
+    } catch (e) { rankError = '送信できなかったよ（端末内には保存したよ）'; }
+    await refreshRanking();
+  } else {
+    ranking = local.slice(0, RANK_MAX);
+  }
+  lastRank = ranking.findIndex(r => r.name === name && r.score === score);
 }
 document.getElementById('ok').addEventListener('click', submitEntry);
+document.getElementById('skip').addEventListener('click', skipEntry);
 nameEl.addEventListener('keydown', e => { if (e.key === 'Enter') submitEntry(); });
 
 addEventListener('keydown', e => {
@@ -967,19 +1010,23 @@ function draw(now) {
     ctx.fillText(cleared ? '七つの海をわたったベルーガたち。海に平和がもどったよ！' : 'STAGE ' + (stage + 1) + '　' + st.name + ' で力つきた…', W / 2, 128);
     ctx.fillStyle = '#fff';
     if (!entryActive) {
-      ctx.font = 'bold 18px sans-serif'; ctx.fillText('🏆 ランキング（この端末）', W / 2, 150);
-      ctx.font = '18px sans-serif';
-      if (!ranking.length) ctx.fillText('まだ記録がありません', W / 2, 195);
-      ranking.forEach((r, i) => {
-        const y = 188 + i * 30, me = i === lastRank;
-        if (me) { ctx.fillStyle = 'rgba(255,224,102,.25)'; ctx.fillRect(W / 2 - 170, y - 20, 340, 26); }
+      ctx.font = 'bold 17px sans-serif';
+      ctx.fillText(db ? '🌏 みんなのランキング' : '🏆 ランキング（この端末）', W / 2, 148);
+      ctx.font = '15px sans-serif';
+      if (rankLoading) ctx.fillText('読み込み中…', W / 2, 172);
+      else if (rankError) { ctx.fillStyle = '#ffcf8f'; ctx.fillText(rankError, W / 2, 172); ctx.fillStyle = '#fff'; }
+      else if (!ranking.length) ctx.fillText('まだ記録がありません', W / 2, 172);
+      ctx.font = '16px sans-serif';
+      ranking.slice(0, 10).forEach((r, i) => {
+        const y = 182 + i * 21, me = i === lastRank;
+        if (me) { ctx.fillStyle = 'rgba(255,224,102,.25)'; ctx.fillRect(W / 2 - 170, y - 15, 340, 20); }
         ctx.fillStyle = me ? '#ffe066' : '#fff';
         ctx.textAlign = 'left';  ctx.fillText((i + 1) + '位', W / 2 - 155, y);
         ctx.fillText(r.name, W / 2 - 90, y);
         ctx.textAlign = 'right'; ctx.fillText(r.score, W / 2 + 155, y);
       });
       ctx.fillStyle = '#fff'; ctx.textAlign = 'center';
-      ctx.fillText(touchMode ? 'タップでリトライ' : 'クリックまたは R でリトライ', W / 2, 400);
+      ctx.fillText(touchMode ? 'タップでリトライ' : 'クリックまたは R でリトライ', W / 2, 424);
     }
   }
 }
