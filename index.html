@@ -18,6 +18,7 @@
   canvas { box-sizing:border-box; background:#bfe6f5; cursor:crosshair; border:2px solid #345; width:min(100vw, calc(100vh * 16 / 9), 1100px); width:min(100vw, calc(100dvh * 16 / 9), 1100px); height:auto; image-rendering:pixelated; touch-action:none; display:block; }
   #fsbtn { display:none; position:absolute; left:22px; bottom:6px; width:30px; height:30px; padding:0; font-size:16px; line-height:28px; border-radius:6px; border:1px solid rgba(255,255,255,.6); background:rgba(20,50,80,.55); color:#fff; }
   @media (pointer: coarse) { #fsbtn { display:block; } }
+  #soundbtn { position:absolute; right:22px; bottom:6px; width:30px; height:30px; padding:0; font-size:15px; line-height:28px; border-radius:6px; border:1px solid rgba(255,255,255,.6); background:rgba(20,50,80,.55); color:#fff; cursor:pointer; }
   #rotate { display:none; position:fixed; inset:0; z-index:10; background:#16324a; color:#fff; font:20px/1.7 sans-serif; text-align:center; flex-direction:column; align-items:center; justify-content:center; gap:14px; }
   #rotate .ico { font-size:64px; }
   #rotate button { font-size:18px; padding:10px 22px; border-radius:8px; border:0; background:#5aa9d6; color:#fff; }
@@ -35,6 +36,7 @@
     <small>※本名などの個人名は入れないでね</small>
   </div>
   <button id="fsbtn" title="全画面">⛶</button>
+  <button id="soundbtn" title="音楽 ON/OFF">🔊</button>
 </div>
 <div id="rotate">
   <div class="ico">📱↻</div>
@@ -246,6 +248,128 @@ const STAGES = [
 const AMB = Array.from({ length:70 }, () => ({ x:Math.random(), y:Math.random(), s:0.4 + Math.random() * 0.9, p:Math.random() * 6 }));
 const mod = (a, n) => ((a % n) + n) % n;
 
+// ============================================================
+// BGM（Web Audio APIでその場合成するチップチューン風サウンド。音声ファイルは使わない）
+// ============================================================
+const Music = (() => {
+  let actx = null, master = null, filter = null, muted = false, current = null;
+  const MUTE_KEY = 'beluga-defense-muted';
+  try { muted = localStorage.getItem(MUTE_KEY) === '1'; } catch (e) {}
+
+  function ensure() {
+    if (!actx) {
+      try {
+        actx = new (window.AudioContext || window.webkitAudioContext)();
+        master = actx.createGain(); master.gain.value = muted ? 0 : 0.32;
+        filter = actx.createBiquadFilter(); filter.type = 'lowpass'; filter.frequency.value = 6500;
+        master.connect(filter); filter.connect(actx.destination);
+      } catch (e) { actx = null; }
+    }
+    if (actx && actx.state === 'suspended') actx.resume().catch(() => {});
+  }
+  function midiFreq(semi) { return 220 * Math.pow(2, semi / 12); }   // A3=220Hz からの半音オフセット
+  function note(wave, freq, start, dur, vol, detune) {
+    const o = actx.createOscillator(), g = actx.createGain();
+    o.type = wave; o.frequency.value = freq; o.detune.value = detune || 0;
+    g.gain.setValueAtTime(0, start);
+    g.gain.linearRampToValueAtTime(vol, start + 0.012);
+    g.gain.setValueAtTime(vol, Math.max(start + 0.02, start + dur - 0.05));
+    g.gain.linearRampToValueAtTime(0, start + dur);
+    o.connect(g); g.connect(master);
+    o.start(start); o.stop(start + dur + 0.02);
+  }
+  function noise(start, dur, vol, hp) {   // ハイハット/キック用のノイズ音
+    const n = Math.max(1, Math.floor(actx.sampleRate * dur));
+    const buf = actx.createBuffer(1, n, actx.sampleRate), data = buf.getChannelData(0);
+    for (let i = 0; i < n; i++) data[i] = (Math.random() * 2 - 1) * (1 - i / n);
+    const src = actx.createBufferSource(); src.buffer = buf;
+    const f = actx.createBiquadFilter(); f.type = 'highpass'; f.frequency.value = hp;
+    const g = actx.createGain(); g.gain.setValueAtTime(vol, start); g.gain.exponentialRampToValueAtTime(0.001, start + dur);
+    src.connect(f); f.connect(g); g.connect(master);
+    src.start(start);
+  }
+  function stopCurrent() { if (current) { current.stop(); current = null; } }
+
+  // 16ステップ（16分音符）のループを、少し先読みしながらスケジューリングし続ける
+  function play(def) {
+    ensure(); if (!actx) return;
+    stopCurrent();
+    if (current && current.def === def) return;   // 同じ曲なら鳴らし直さない
+    const stepDur = 60 / def.bpm / 4;
+    let step = 0, nextTime = actx.currentTime + 0.05, cancelled = false;
+    function playStep(i, t) {
+      const b = def.bass[i % def.bass.length];
+      if (b != null) note(def.bassWave || 'square', midiFreq(def.root + b), t, stepDur * (def.bassLen || 1) * 0.92, def.bassVol ?? 0.24, def.detune);
+      const l = def.lead[i % def.lead.length];
+      if (l != null) note(def.leadWave || 'triangle', midiFreq(def.root + 12 + l), t, stepDur * (def.leadLen || 1) * 0.85, def.leadVol ?? 0.22, def.detune);
+      if (def.perc) {
+        const p = def.perc[i % def.perc.length];
+        if (p === 1) noise(t, stepDur * 0.6, 0.14, 7000);
+        if (p === 2) noise(t, stepDur * 1.3, 0.4, 120);
+      }
+    }
+    const id = setInterval(() => {
+      if (cancelled) return;
+      while (nextTime < actx.currentTime + 0.15) { playStep(step, nextTime); nextTime += stepDur; step++; }
+    }, 30);
+    current = { def, stop() { cancelled = true; clearInterval(id); } };
+  }
+  function stop() { stopCurrent(); }
+  // 単発のジングル（勝利・敗北など）。ループはしない
+  function playJingle(notes, wave) {
+    ensure(); if (!actx) return;
+    stopCurrent();
+    const t0 = actx.currentTime + 0.03;
+    for (const [semi, at, dur, vol] of notes) note(wave || 'square', midiFreq(semi), t0 + at, dur, vol ?? 0.3);
+  }
+  function setMuted(m) {
+    muted = m; try { localStorage.setItem(MUTE_KEY, m ? '1' : '0'); } catch (e) {}
+    if (master && actx) master.gain.setTargetAtTime(m ? 0 : 0.32, actx.currentTime, 0.05);
+  }
+  function toggle() { setMuted(!muted); return muted; }
+  return { ensure, play, stop, playJingle, get muted() { return muted; }, setMuted, toggle };
+})();
+
+// 各ステージの曲（7海）。root=キーの半音オフセット、bass/lead/perc は16ステップ配列（null=休符）
+const STAGE_TRACKS = [
+  { name:'北極海', bpm:90, root:0, bassWave:'triangle', leadWave:'triangle', bassVol:.20, leadVol:.24,
+    bass:[0,null,null,null, 7,null,null,null, 0,null,null,null, 5,null,null,null],
+    lead:[null,null,12,null, 15,null,null,19, null,17,null,15, null,null,12,null] },
+  { name:'北大西洋', bpm:86, root:-3, bassWave:'sawtooth', leadWave:'triangle', bassVol:.16, leadVol:.20, detune:6,
+    bass:[0,null,null,null, 5,null,null,null, 3,null,null,null, 7,null,null,null],
+    lead:[null,12,null,null, 15,null,14,null, null,12,null,10, null,null,null,null] },
+  { name:'北太平洋', bpm:116, root:2, bassWave:'square', leadWave:'square', bassVol:.18, leadVol:.20,
+    bass:[0,null,7,null, 0,null,7,3, 0,null,7,null, 0,3,7,null],
+    lead:[null,12,null,15, null,12,null,19, null,15,null,12, null,17,null,15],
+    perc:[1,0,1,0, 1,0,1,1, 1,0,1,0, 1,0,1,1] },
+  { name:'インド洋', bpm:104, root:4, bassWave:'triangle', leadWave:'triangle', bassVol:.18, leadVol:.20,
+    bass:[0,7,12,7, 0,7,12,7, 0,7,12,7, 0,7,12,7],
+    lead:[null,16,null,19, null,16,null,14, null,12,null,16, null,14,null,12],
+    perc:[0,0,1,0, 0,0,1,0, 0,0,1,0, 0,0,1,0] },
+  { name:'南太平洋', bpm:128, root:7, bassWave:'square', leadWave:'square', bassVol:.20, leadVol:.22,
+    bass:[0,null,0,7, 0,null,0,7, 0,null,0,5, 0,null,0,7],
+    lead:[12,null,16,null, 19,null,16,null, 21,null,19,null, 16,null,12,null],
+    perc:[2,1,1,1, 2,1,1,1, 2,1,1,1, 2,1,1,1] },
+  { name:'南大西洋', bpm:80, root:-5, bassWave:'sine', leadWave:'sine', bassVol:.16, leadVol:.14, bassLen:8, leadLen:3,
+    bass:[0,null,null,null, null,null,null,null, 0,null,null,null, null,null,null,null],
+    lead:[null,null,null,null, null,13,null,null, null,null,null,null, null,null,18,null] },
+  { name:'南極海', bpm:132, root:-2, bassWave:'sawtooth', leadWave:'square', bassVol:.18, leadVol:.20,
+    bass:[0,3,0,3, 7,3,7,3, 0,3,0,3, 5,3,5,7],
+    lead:[12,null,15,null, 12,null,17,null, 12,null,15,null, 19,17,15,12],
+    perc:[1,1,1,1, 1,1,1,1, 1,1,1,1, 1,1,1,1] },
+];
+// ボス戦BGM：どのステージでも共通の曲調だが、進むほど少しずつ速く・高くなって緊張感が増す
+function bossTrack(stage) {
+  return { bpm:150 + stage * 4, root:-4 + Math.min(stage, 5), bassWave:'sawtooth', leadWave:'square', bassVol:.22, leadVol:.22,
+    bass:[0,0,7,0, 0,0,7,3, 0,0,7,0, 0,3,7,10],
+    lead:[null,12,null,12, 15,null,12,null, null,12,null,15, 19,null,17,null],
+    perc:[2,1,1,2, 1,1,2,1, 2,1,1,2, 1,1,2,1] };
+}
+// 単発ジングル：[半音オフセット, 開始秒, 長さ秒, 音量]
+const JINGLE_STAGE_CLEAR = [[0,0,.14,.3],[4,.12,.14,.3],[7,.24,.14,.3],[12,.36,.3,.34]];
+const JINGLE_GAME_OVER   = [[7,0,.22,.28],[3,.2,.22,.28],[0,.4,.22,.28],[-5,.62,.5,.3]];
+const JINGLE_ALL_CLEAR   = [[0,0,.14,.3],[4,.13,.14,.3],[7,.26,.14,.3],[12,.39,.14,.32],[16,.52,.14,.32],[19,.65,.5,.36],[24,.65,.5,.24]];
+
 const player = { x:52, y:H/2, w:60, h:33, speed:260, hp:10 };
 let stage, phase, phaseT, stageTime, cleared, clearInfo, bossWarn, bossRef, allies, squids, texts, squidTimer, bullets, enemies, particles, ammo, reloadEnd, lastShot, spawnTimer, elapsed, score, gameOver;
 const keys = {}, mouse = { x:W/2, y:H/2, down:false };
@@ -292,6 +416,7 @@ const entryEl = document.getElementById('entry'), nameEl = document.getElementBy
 
 function onGameOver() {
   lastRank = -1;
+  Music.playJingle(cleared ? JINGLE_ALL_CLEAR : JINGLE_GAME_OVER);
   if (score <= 0) return;
   if (!db) {   // 端末内ランキングのときは、上位に入ったときだけ登録をすすめる
     const qualifies = ranking.length < RANK_MAX || score > ranking[ranking.length - 1].score;
@@ -326,7 +451,9 @@ nameEl.addEventListener('keydown', e => { if (e.key === 'Enter') submitEntry(); 
 
 addEventListener('keydown', e => {
   if (e.target === nameEl) return;   // 名前入力中はゲーム操作を無視
+  Music.ensure();   // ブラウザの自動再生制限：最初の操作でAudioContextを起動する
   if ((e.key === ' ' || e.key === 'Enter') && (phase === 'intro' || phase === 'clear')) { skipCard(); e.preventDefault(); return; }
+  if (e.key.toLowerCase() === 'm') { setSoundIcon(Music.toggle()); return; }
   keys[e.key.toLowerCase()] = true;
   if (['arrowup','arrowdown'].includes(e.key.toLowerCase())) e.preventDefault();
   if (e.key.toLowerCase() === 'r') { if (gameOver) { if (!entryActive) reset(); } else startReload(performance.now()); }
@@ -338,7 +465,7 @@ function setMouse(e) {
   mouse.y = (e.clientY - r.top) * H / r.height;
 }
 cv.addEventListener('mousemove', setMouse);
-cv.addEventListener('mousedown', e => { setMouse(e); mouse.down = true; if (gameOver && !entryActive) reset(); else skipCard(); });
+cv.addEventListener('mousedown', e => { Music.ensure(); setMouse(e); mouse.down = true; if (gameOver && !entryActive) reset(); else skipCard(); });
 addEventListener('mouseup', () => mouse.down = false);
 
 // ---- スマホ操作：左側をなぞって上下移動／右側をおさえて撃つ／右下のボタンでリロード ----
@@ -350,7 +477,7 @@ function touchPos(t) {
   return { x:(t.clientX - r.left) * W / r.width, y:(t.clientY - r.top) * H / r.height };
 }
 cv.addEventListener('touchstart', e => {
-  e.preventDefault(); touchMode = true;
+  e.preventDefault(); touchMode = true; Music.ensure();
   for (const t of e.changedTouches) {
     const p = touchPos(t);
     if (gameOver) { if (!entryActive) reset(); continue; }
@@ -388,6 +515,10 @@ document.getElementById('fs').addEventListener('click', goFullscreen);
 document.getElementById('fsbtn').addEventListener('click', () => {
   if (document.fullscreenElement) document.exitFullscreen(); else goFullscreen();
 });
+const soundBtn = document.getElementById('soundbtn');
+function setSoundIcon(m) { soundBtn.textContent = m ? '🔇' : '🔊'; }
+setSoundIcon(Music.muted);
+soundBtn.addEventListener('click', () => { Music.ensure(); setSoundIcon(Music.toggle()); });
 // ランキング入力欄を画面の大きさに合わせる
 function fitEntry() { entryEl.style.setProperty('--s', Math.min(1.4, cv.getBoundingClientRect().width / 800).toFixed(2)); }
 addEventListener('resize', fitEntry); addEventListener('orientationchange', fitEntry); fitEntry();
@@ -408,6 +539,7 @@ function shoot(now) {
 function startStage(i) {
   stage = i; phase = 'intro'; phaseT = 0; stageTime = 0; bossWarn = 0; bossRef = null;
   enemies = []; bullets = []; squids = []; spawnTimer = 1;
+  Music.play(STAGE_TRACKS[i]);   // ステージの入場カードが出た瞬間からその海の曲に切り替える
 }
 function advancePhase() {
   if (phase === 'intro') { phase = 'wave'; phaseT = 0; }
@@ -467,6 +599,7 @@ function startBoss() {
               hp, maxHp:hp, speed:0, dmg:5, score:300 + 150 * stage, flash:0, x:W + S.w / 2, y:H / 2, t:0, entering:true, summonCd:4 };
   enemies.push(bossRef);
   bossWarn = 2.6;
+  Music.play(bossTrack(stage));   // アップテンポで切迫感のあるボス戦BGMに切り替える
 }
 function summonMinions(e, enraged) {
   const n = 1 + (stage >= 3 ? 1 : 0) + (enraged ? 1 : 0);
@@ -500,11 +633,12 @@ function onBossDefeated(e) {
   burst(e.x, e.y, '#ffe066', 60, 340); burst(e.x, e.y, e.chip, 50, 260);
   floatText(e.x, e.y - e.h / 2 - 10, 'ボスげきは！', '#e8890c');
   bossRef = null; bullets = [];
-  if (stage >= STAGES.length - 1) { cleared = true; gameOver = true; onGameOver(); return; }
+  if (stage >= STAGES.length - 1) { cleared = true; gameOver = true; Music.stop(); onGameOver(); return; }
   const heal = Math.min(2, 10 - player.hp);
   player.hp += heal;
   clearInfo = { bonus:e.score, heal };
   phase = 'clear'; phaseT = 0;
+  Music.playJingle(JINGLE_STAGE_CLEAR);
 }
 
 const ALLY_KINDS = {
